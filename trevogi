@@ -1,0 +1,251 @@
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Чек-лист координат - Шерлок Холмс</title>
+    <style>
+        * {
+            margin: 0;
+            padding: 0;
+            box-sizing: border-box;
+        }
+        
+        body {
+            font-family: Georgia, 'Times New Roman', serif;
+            background: #f4f1e8;
+            padding: 15px;
+            line-height: 1.4;
+        }
+        
+        .container {
+            max-width: 500px;
+            margin: 0 auto;
+            background: linear-gradient(45deg, #f4f1e8 0%, #e8e3d6 50%, #ddd6c4 100%);
+            border: 3px solid #8b6638;
+            border-radius: 12px;
+            padding: 20px;
+            box-shadow: 0 8px 20px rgba(0,0,0,0.2);
+        }
+        
+        .header {
+            text-align: center;
+            margin-bottom: 20px;
+        }
+        
+        .icon {
+            font-size: 2.5em;
+            margin-bottom: 10px;
+        }
+        
+        .title {
+            font-size: 1.5em;
+            font-weight: bold;
+            color: #2c1810;
+            margin-bottom: 5px;
+        }
+        
+        .subtitle {
+            font-style: italic;
+            color: #5d4b3a;
+            margin-bottom: 5px;
+        }
+        
+        .case-number {
+            font-size: 0.8em;
+            color: #8b6638;
+            font-weight: bold;
+            letter-spacing: 1px;
+        }
+        
+        .checklist-item {
+            display: flex;
+            align-items: flex-start;
+            padding: 12px;
+            margin: 12px 0;
+            background: rgba(255,255,255,0.4);
+            border-radius: 8px;
+            border-left: 4px solid #8b6638;
+            transition: all 0.3s ease;
+            cursor: pointer;
+        }
+        
+        .checklist-item:hover {
+            background: rgba(255,255,255,0.6);
+            transform: translateX(3px);
+        }
+        
+        .checklist-item.checked {
+            background: rgba(76,175,80,0.2);
+            border-left-color: #4caf50;
+        }
+        
+        .checkbox {
+            width: 18px;
+            height: 18px;
+            border: 2px solid #8b6638;
+            border-radius: 3px;
+            margin-right: 12px;
+            margin-top: 2px;
+            position: relative;
+            flex-shrink: 0;
+        }
+        
+        .checkbox.checked {
+            background: #4caf50;
+            border-color: #4caf50;
+        }
+        
+        .checkbox.checked::after {
+            content: '✓';
+            position: absolute;
+            color: white;
+            font-size: 14px;
+            font-weight: bold;
+            top: -2px;
+            left: 2px;
+        }
+        
+        .item-content {
+            flex: 1;
+        }
+        
+        .item-title {
+            font-weight: bold;
+            color: #2c1810;
+            margin-bottom: 3px;
+        }
+        
+        .item-source {
+            font-size: 0.85em;
+            color: #8b6638;
+            font-style: italic;
+        }
+        
+        .progress {
+            margin: 20px 0;
+            text-align: center;
+        }
+        
+        .progress-bar {
+            width: 100%;
+            height: 8px;
+            background: rgba(139,102,56,0.3);
+            border-radius: 4px;
+            overflow: hidden;
+            margin-bottom: 8px;
+        }
+        
+        .progress-fill {
+            height: 100%;
+            background: linear-gradient(90deg, #8b6638, #a67c45);
+            width: 0%;
+            transition: width 0.5s ease;
+        }
+        
+        .progress-text {
+            font-size: 0.9em;
+            color: #5d4b3a;
+            font-weight: bold;
+        }
+        
+        .note {
+            margin-top: 20px;
+            padding: 12px;
+            background: rgba(139,102,56,0.1);
+            border: 1px dashed #8b6638;
+            border-radius: 6px;
+            font-style: italic;
+            color: #5d4b3a;
+            font-size: 0.9em;
+        }
+        
+        .signature {
+            text-align: right;
+            margin-top: 8px;
+            font-size: 0.8em;
+            color: #8b6638;
+        }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <div class="header">
+            <div class="icon">🔍</div>
+            <div class="title">Чек-лист координат</div>
+            <div class="subtitle">"Элементарно, Ватсон!"</div>
+            <div class="case-number">ДЕЛО № 221B-2025</div>
+        </div>
+        
+        <div class="checklist">
+            <div class="checklist-item" onclick="toggleItem(this)">
+                <div class="checkbox"></div>
+                <div class="item-content">
+                    <div class="item-title">Трек последней аренды</div>
+                    <div class="item-source">ЕМСистема → карточка СИМ → Последняя аренда</div>
+                </div>
+            </div>
+            
+            <div class="checklist-item" onclick="toggleItem(this)">
+                <div class="checkbox"></div>
+                <div class="item-content">
+                    <div class="item-title">Время последней аренды</div>
+                    <div class="item-source">ЕМСистема → карточка СИМ → Последняя аренда</div>
+                </div>
+            </div>
+            
+            <div class="checklist-item" onclick="toggleItem(this)">
+                <div class="checkbox"></div>
+                <div class="item-content">
+                    <div class="item-title">Гео клиента</div>
+                    <div class="item-source">ЕМСистема → карточка СИМ → Последняя аренда → Гео клиента</div>
+                </div>
+            </div>
+            
+            <div class="checklist-item" onclick="toggleItem(this)">
+                <div class="checkbox"></div>
+                <div class="item-content">
+                    <div class="item-title">Трек СИМ вне аренды</div>
+                    <div class="item-source">Запрос в @urent_intsupport_bot</div>
+                </div>
+            </div>
+        </div>
+        
+        <div class="progress">
+            <div class="progress-bar">
+                <div class="progress-fill" id="progressFill"></div>
+            </div>
+            <div class="progress-text" id="progressText">Улики собраны: 0/4</div>
+        </div>
+        
+        <div class="note">
+            "Дедукция начинается с тщательного сбора фактов. Каждая координата — ключ к разгадке!"
+            <div class="signature">— Доктор Ватсон</div>
+        </div>
+    </div>
+
+    <script>
+        function toggleItem(item) {
+            item.classList.toggle('checked');
+            const checkbox = item.querySelector('.checkbox');
+            checkbox.classList.toggle('checked');
+            updateProgress();
+        }
+        
+        function updateProgress() {
+            const total = document.querySelectorAll('.checklist-item').length;
+            const checked = document.querySelectorAll('.checklist-item.checked').length;
+            const percentage = (checked / total) * 100;
+            
+            document.getElementById('progressFill').style.width = percentage + '%';
+            document.getElementById('progressText').textContent = `Улики собраны: ${checked}/${total}`;
+            
+            if (checked === total) {
+                setTimeout(() => {
+                    alert('🎉 Превосходно! Все координаты собраны. Можно приступать к расследованию!');
+                }, 300);
+            }
+        }
+    </script>
+</body>
+</html>
