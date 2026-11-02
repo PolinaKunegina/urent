@@ -437,6 +437,12 @@ async def cmd_bindtopic(update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> None:
     await msg.reply_text(f"✅ Эта тема — {'план' if kind == 'plan' else 'факт'}. Читаю отсюда сообщения партнёров.")
 
 
+async def on_bare_key(update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> None:
+    """Ключ прислали в личку без команды — принимаем так же, как /setkey."""
+    ctx.args = [(update.effective_message.text or "").strip().split()[0]]
+    await cmd_setkey(update, ctx)
+
+
 async def cmd_setkey(update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> None:
     msg = update.effective_message
     if update.effective_chat.type != "private":
@@ -542,6 +548,8 @@ def main() -> None:
     app.add_handler(CommandHandler("bindtopic", cmd_bindtopic))
     app.add_handler(CommandHandler("setkey", cmd_setkey))
     app.add_handler(CallbackQueryHandler(on_newlead, pattern=r"^newlead:"))
+    app.add_handler(MessageHandler(
+        filters.ChatType.PRIVATE & filters.Regex(r"^\s*sk-ant-[\w-]+\s*$"), on_bare_key))
     app.add_handler(MessageHandler(
         filters.UpdateType.MESSAGES & (filters.TEXT | filters.CAPTION) & ~filters.COMMAND,
         on_message))
