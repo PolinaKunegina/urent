@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import asyncio
 import logging
+import re
 from datetime import datetime, timedelta
 
 from telegram import Update
@@ -49,7 +50,8 @@ HELP = (
     "/week — итоги последних 7 дней (руководителям)\n"
     "/hours 7 — часы по процессам за N дней (руководителям)\n"
     "/status — проверка настроек (руководителям)\n"
-    "/bindchat — сделать этот чат чатом партнёров (руководителям)"
+    "/bindchat — сделать этот чат чатом партнёров (руководителям)\n"
+    "/setsheet ссылка — переключить бота на другую таблицу (руководителям)"
 )
 
 
@@ -111,8 +113,16 @@ async def _send(ctx, chat_id: int, text: str) -> None:
                                    disable_web_page_preview=True)
 
 
+def _apply_sheet_override(ctx) -> None:
+    """Таблицу можно сменить из Telegram командой /setsheet — она главнее .env."""
+    override = _store(ctx).get_setting("sheet_id")
+    if override:
+        _cfg(ctx).sheet_id = override
+
+
 async def _snapshot(ctx):
     cfg = _cfg(ctx)
+    _apply_sheet_override(ctx)
     snap = await asyncio.to_thread(load_snapshot, cfg, _today(cfg))
     if snap.funnel is not None:
         ctx.application.bot_data["directory"] = snap.directory
@@ -218,6 +228,40 @@ async def cmd_bindchat(update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> None:
     _store(ctx).set_setting("partners_chat_id", str(chat.id))
     await update.effective_message.reply_text(
         "✅ Готово: это чат партнёров. Здесь я считаю отчёты с хэштегами и в 18:30 напоминаю про таблицу.")
+
+
+async def cmd_setsheet(update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> None:
+    if not _is_manager(ctx, update):
+        return await _deny(update)
+    raw = " ".join(ctx.args or []).strip()
+    m = re.search(r"/d/([A-Za-z0-9_-]{20,})", raw) or re.fullmatch(r"([A-Za-z0-9_-]{20,})", raw)
+    if not m:
+        await update.effective_message.reply_text(
+            "Пришлите команду со ссылкой на таблицу, например:\n/setsheet https://docs.google.com/spreadsheets/d/…/edit")
+        return
+    cfg = _cfg(ctx)
+    old = cfg.sheet_id
+    cfg.sheet_id = m.group(1)
+    snap = await asyncio.to_thread(load_snapshot, cfg, _today(cfg))
+    if snap.funnel is None:
+        cfg.sheet_id = old
+        await update.effective_message.reply_text(
+            "Не получилось открыть эту таблицу, оставила прежнюю.\n"
+            f"{snap.errors[0] if snap.errors else ''}\n\n"
+            "Проверьте, что адресу partners-pulse-bot@partners-pulse.iam.gserviceaccount.com "
+            "дан доступ «Редактор».")
+        return
+    _store(ctx).set_setting("sheet_id", cfg.sheet_id)
+    ctx.application.bot_data["directory"] = snap.directory
+    kind = ("✅ Это Google Таблица: подсветка и лист с часами заработают в течение часа."
+            if snap.is_gsheet else "⚠️ Это всё ещё .xlsx: бот только читает, подсветки не будет.")
+    await update.effective_message.reply_text(
+        f"Готово, теперь работаю с этой таблицей: {len(snap.funnel.leads)} лидов на листе "
+        f"«{snap.funnel.tab}».\n{kind}")
+    if snap.is_gsheet and cfg.write_back:
+        warning = await asyncio.to_thread(write_back, cfg, snap, _store(ctx))
+        if warning:
+            await update.effective_message.reply_text(f"⚠️ {warning}")
 
 
 async def cmd_status(update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> None:
@@ -363,6 +407,7 @@ def main() -> None:
     app.add_handler(CommandHandler("mine", cmd_mine))
     app.add_handler(CommandHandler("bindchat", cmd_bindchat))
     app.add_handler(CommandHandler("status", cmd_status))
+    app.add_handler(CommandHandler("setsheet", cmd_setsheet))
     app.add_handler(MessageHandler(
         filters.UpdateType.MESSAGES & (filters.TEXT | filters.CAPTION) & ~filters.COMMAND,
         on_message))
