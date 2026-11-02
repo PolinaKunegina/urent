@@ -118,8 +118,8 @@ class SheetsWriter:
         if self._sheet(tab) is None:
             self._batch([{"addSheet": {"properties": {"title": tab,
                                                       "gridProperties": {"frozenRowCount": 1}}}}])
-        header = ["Дата", "Партнёр", "Процесс", "Часы", "Что делали", "Telegram"]
-        r = self.s.post(f"{SHEETS_API}/{self.id}/values/'{tab}'!A:F:clear", json={}, timeout=30)
+        header = ["Дата", "Партнёр", "План/факт", "Процесс", "Часы", "Людей", "Что делали", "Telegram"]
+        r = self.s.post(f"{SHEETS_API}/{self.id}/values/'{tab}'!A:H:clear", json={}, timeout=30)
         r.raise_for_status()
         self._values(f"'{tab}'!A1", [header, *rows])
 
@@ -134,3 +134,14 @@ class SheetsWriter:
         rows = [[name, "", ""] for name in sources]
         self._values(f"'{tab}'!A1", [PARTNERS_HEADER, *rows])
         log.info("Создан лист «%s» с %d вариантами источника", tab, len(rows))
+
+    # ---------- запись факта партнёра ----------
+
+    def write_cells(self, tab: str, cells) -> None:
+        """cells: объекты с row, col (0-based), value. Одним запросом."""
+        if not cells:
+            return
+        data = [{"range": f"'{tab}'!{col_letter(c.col)}{c.row}", "values": [[c.value]]} for c in cells]
+        r = self.s.post(f"{SHEETS_API}/{self.id}/values:batchUpdate",
+                        json={"valueInputOption": "RAW", "data": data}, timeout=30)
+        r.raise_for_status()

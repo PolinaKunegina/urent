@@ -56,7 +56,8 @@ def load_snapshot(cfg: Config, today: date, local_xlsx: bytes | None = None,
         records = parse_partners(data)
         if records is not None:  # лист «Партнёры» главнее файла
             directory, partners_tab = Directory.from_records(records), True
-        stats = compute(funnel.leads, today, cfg.exclude_status_regex, directory)
+        stats = compute(funnel.leads, today, cfg.exclude_status_regex, directory,
+                        cfg.closed_status_regex)
         return Snapshot(funnel, stats, directory, is_gsheet=(mime == GSHEET_MIME),
                         partners_tab=partners_tab)
     except Exception as exc:
@@ -78,8 +79,9 @@ def write_back(cfg: Config, snap: Snapshot, store: Store | None, session=None) -
         if not snap.partners_tab:
             writer.create_partners_tab(PARTNERS_TAB, distinct_sources(snap.funnel))
         if store is not None:
-            rows = [[d, p, PROCESSES[pr][0], h, note or "", f"@{u}" if u else ""]
-                    for d, p, pr, h, note, u in store.all_entries()]
+            rows = [[d, p, "план" if k == "plan" else "факт", PROCESSES[pr][0], h,
+                     ppl if ppl is not None else "", note or "", f"@{u}" if u else ""]
+                    for d, p, pr, h, note, u, k, ppl in store.all_entries()]
             writer.write_hours(cfg.hours_tab, rows)
     except Exception as exc:
         log.exception("Не удалось записать в таблицу")
@@ -106,7 +108,7 @@ def morning_report(cfg: Config, snap: Snapshot, store: Store | None, today: date
     if store is not None:
         y = today - timedelta(days=1)
         hours_block = render_hours(store.summary(y, y), store.summary(today - timedelta(days=7), y),
-                                   snap.expected_partners(), y)
+                                   snap.expected_partners(), y, plan_data=store.summary(y, y, "plan"))
     errors = list(snap.errors) + ([warning] if warning else [])
     if snap.stats is None:
         return "📊 Сводка не собрана.\n" + "\n".join(f"❗️ {x}" for x in errors)
@@ -122,13 +124,13 @@ def weekly_report(snap: Snapshot, store: Store | None, today: date) -> str | Non
 
 
 def evening_chat_text(snap: Snapshot, store: Store | None, today: date) -> str:
-    text = ("Коллеги, напоминание 🌿 До 19:00 обновите таблицу воронки: статус, что происходит "
-            "и <b>дату следующего касания</b> у каждого лида. И отчёт по часам с хэштегами "
-            "#знакомство, #прогрев, #сделка (эталон — /template).")
+    text = ("Коллеги, напоминание 🌿 До 19:00 напишите <b>факт за день</b> в тему Факт: "
+            "часы на знакомство, прогрев и сделки, и по каждому клиенту — что происходит "
+            "и <b>когда следующее касание</b>. Таблицу заполню сама. Пример — /template.")
     if store is not None:
         silent = not_reported(snap.expected_partners(), store.summary(today, today))
         if silent:
-            text += "\n\n🔕 Сегодня ещё нет отчёта от: " + ", ".join(silent)
+            text += "\n\n🔕 Сегодня ещё нет факта от: " + ", ".join(silent)
     return text
 
 

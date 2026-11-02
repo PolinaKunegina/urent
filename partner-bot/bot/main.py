@@ -9,17 +9,19 @@ from __future__ import annotations
 
 import asyncio
 import logging
+import os
 import re
 from datetime import datetime, timedelta
 
-from telegram import Update
+from telegram import InlineKeyboardButton, InlineKeyboardMarkup, Update
 from telegram.constants import ParseMode
-from telegram.ext import (Application, CommandHandler, ContextTypes,
+from telegram.ext import (Application, CallbackQueryHandler, CommandHandler, ContextTypes,
                           MessageHandler, TypeHandler, filters)
 
 from .analytics import e, fmt_hours, render_partner_evening, split_message
 from .config import Config, load_config
 from .hashtags import PROCESSES, Store, parse_message
+from .flow import confirm_new_lead, detect_kind, process_report
 from .partners import Directory
 from .report import (evening_chat_text, evening_partner_texts, load_snapshot, morning_report,
                      weekly_report, write_back)
@@ -29,14 +31,20 @@ logging.getLogger("httpx").setLevel(logging.WARNING)
 log = logging.getLogger("partner-bot")
 
 TEMPLATE = (
-    "<b>Эталон отчёта в чат</b> (каждый процесс с новой строки):\n\n"
-    "<code>#отчет\n"
-    "#знакомство 2 ч — презентация экосистемы для Котовой, показала личный кабинет\n"
-    "#прогрев 1,5 ч — переписка с Соколовой, отправила 2 кейса\n"
-    "#сделка 30 мин — Жуков: согласовали пакет, ждём оплату</code>\n\n"
-    "Часы можно писать так: <code>2 ч</code>, <code>1,5 часа</code>, <code>40 мин</code>, <code>1:30</code>.\n"
-    "Если ошибка — просто отредактируй сообщение, я пересчитаю.\n"
-    "Отчёт принят, если бот поставил ✍."
+    "<b>Как писать план и факт</b>\n\n"
+    "Пиши как удобно, своими словами: бот на ИИ сам разберёт сообщение и внесёт в таблицу.\n"
+    "Утром — в тему <b>План</b>, вечером до 19:00 — в тему <b>Факт</b> "
+    "(или начни сообщение со слова «План» / «Факт»).\n\n"
+    "<b>Пример факта:</b>\n"
+    "<code>Факт\n"
+    "Знакомство с экосистемой — 2 ч: нетворкинг в бизнес-клубе, пригласила 3 человек на четверг.\n"
+    "Прогрев — 1,5 ч: переписка с Котовой Верой, отправила кейсы; созвон с Орловым Петром.\n"
+    "Сделки — 1 ч: диагностика с Жуковым Ильёй, оплатил вход 5000.\n\n"
+    "Котова Вера — интересуется, следующее касание в четверг, встреча с Антоном.\n"
+    "Орлов Пётр — вторая встреча прошла, созвон 06.11.\n"
+    "Жуков Илья — оплатил вход, следующий шаг — трек с Киром 10.11.</code>\n\n"
+    "Главное по каждому клиенту: имя, что происходит, когда следующее касание. "
+    "Если клиента ещё нет в таблице, бот спросит, добавить ли его."
 )
 
 HELP = (
@@ -51,7 +59,9 @@ HELP = (
     "/hours 7 — часы по процессам за N дней (руководителям)\n"
     "/status — проверка настроек (руководителям)\n"
     "/bindchat — сделать этот чат чатом партнёров (руководителям)\n"
-    "/setsheet ссылка — переключить бота на другую таблицу (руководителям)"
+    "/setsheet ссылка — переключить бота на другую таблицу (руководителям)\n"
+    "/bindtopic план | факт — отправить в теме форума, чтобы бот читал её (руководителям)\n"
+    "/setkey ключ — ключ Claude для разбора сообщений, только в личке (руководителям)"
 )
 
 
@@ -111,6 +121,20 @@ async def _send(ctx, chat_id: int, text: str) -> None:
     for chunk in split_message(text):
         await ctx.bot.send_message(chat_id, chunk, parse_mode=ParseMode.HTML,
                                    disable_web_page_preview=True)
+
+
+def _parser(ctx):
+    """Разборщик на Claude, если задан ключ (в .env или командой /setkey)."""
+    key = os.environ.get("ANTHROPIC_API_KEY") or _store(ctx).get_setting("anthropic_key")
+    if not key:
+        return None
+    cached = ctx.application.bot_data.get("parser")
+    if cached and cached[0] == key:
+        return cached[1]
+    from .llm import ReportParser
+    parser = ReportParser(key)
+    ctx.application.bot_data["parser"] = (key, parser)
+    return parser
 
 
 def _apply_sheet_override(ctx) -> None:
@@ -285,6 +309,14 @@ async def cmd_status(update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> None:
                  (f", ещё не писали боту: {e(', '.join(no_tg))}" if no_tg else ""))
     chat = _partners_chat(ctx)
     lines.append(f"Чат партнёров: {chat}" if chat else "⚠️ Чат партнёров не привязан: /bindchat в нём")
+    lines.append("✅ ИИ-разбор плана и факта включён" if _parser(ctx)
+                 else "⚠️ ИИ-разбор выключен: пришли ключ Claude командой /setkey в личке")
+    store = _store(ctx)
+    with store.db:
+        topics = store.db.execute("SELECT key, value FROM settings WHERE key LIKE 'topic:%'").fetchall()
+    bound = {v for _, v in topics}
+    lines.append("Темы: " + ", ".join(f"{'план' if k == 'plan' else 'факт'} ✅" for k in sorted(bound))
+                 if bound else "⚠️ Темы План/Факт не привязаны: /bindtopic в каждой теме")
     rt = cfg.reminder_time.strftime("%H:%M") if cfg.reminder_time else "выкл"
     lines.append(f"Сводка в {cfg.report_time:%H:%M}, напоминание в {rt}")
     await _send(ctx, update.effective_chat.id, "\n".join(lines))
@@ -311,14 +343,53 @@ async def on_message(update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> None:
     partners_chat = _partners_chat(ctx)
     if chat.type != "private" and partners_chat and chat.id != partners_chat:
         return
-    report = parse_message(msg.text or msg.caption or "")
+    text = msg.text or msg.caption or ""
+    store, cfg = _store(ctx), _cfg(ctx)
+    thread_id = msg.message_thread_id if msg.is_topic_message else None
+    kind = detect_kind(store, chat.id, thread_id, text)
+    parser = _parser(ctx)
+
+    if kind and parser:
+        legacy = parse_message(text)  # только ради #план_Фамилия, если указан
+        partner = _partner_name(ctx, user, legacy or type("R", (), {"partner": None})())
+        try:
+            await msg.set_reaction("👀")
+        except Exception:
+            pass
+        _apply_sheet_override(ctx)
+        try:
+            outcome = await asyncio.to_thread(
+                process_report, cfg, store, parser, text=text, kind=kind, partner=partner,
+                today=msg.date.astimezone(cfg.tz).date(), chat_id=chat.id,
+                message_id=msg.message_id, user_id=user.id)
+        except Exception:
+            log.exception("Не удалось разобрать отчёт")
+            await msg.reply_text("Не получилось разобрать сообщение, попробую позже. "
+                                 "Если повторится — напиши руководителю.")
+            return
+        markup = None
+        if outcome.pending:
+            markup = InlineKeyboardMarkup([
+                [InlineKeyboardButton(f"➕ {name[:28]} — новый", callback_data=f"newlead:{pid}:yes"),
+                 InlineKeyboardButton("Нет", callback_data=f"newlead:{pid}:no")]
+                for pid, name in outcome.pending])
+        try:
+            await msg.set_reaction("✍")
+        except Exception:
+            pass
+        await msg.reply_text(outcome.reply, reply_markup=markup)
+        return
+
+    # запасной путь без ИИ: старые хэштеги с часами
+    report = parse_message(text)
     if report is None:
+        if kind and not parser:
+            log.warning("Пришёл %s, но ключ Claude не задан (/setkey)", kind)
         return
     partner = _partner_name(ctx, user, report)
-    day = msg.date.astimezone(_cfg(ctx).tz).date()
-    _store(ctx).save(chat.id, msg.message_id, user.id, partner, day, report)
+    day = msg.date.astimezone(cfg.tz).date()
+    store.save(chat.id, msg.message_id, user.id, partner, day, report, kind=kind or "fact")
     log.info("Отчёт %s: %s", partner, [(x.process, x.hours) for x in report.entries])
-
     missing = report.missing_hours
     try:
         await msg.set_reaction("✍" if not missing else "🤔")
@@ -329,6 +400,66 @@ async def on_message(update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> None:
         await msg.reply_text(
             f"Записала отчёт, но не вижу часов: {names}. "
             "Допиши, например «#прогрев 1,5 ч — …», можно прямо отредактировать сообщение.")
+
+
+async def on_newlead(update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> None:
+    q = update.callback_query
+    _, pid, answer = q.data.split(":")
+    store, cfg = _store(ctx), _cfg(ctx)
+    if answer == "no":
+        store.pop_pending(int(pid))
+        await q.answer("Ок, не добавляю")
+        await q.message.reply_text(
+            "Поняла, не добавляю. Если это клиент из таблицы, напиши его имя так, как оно записано там.")
+        return
+    await q.answer("Добавляю…")
+    _apply_sheet_override(ctx)
+    try:
+        text = await asyncio.to_thread(confirm_new_lead, cfg, store, int(pid), _today(cfg))
+    except Exception:
+        log.exception("Не удалось добавить лида")
+        text = "Не получилось добавить в таблицу, попробуй позже."
+    await q.message.reply_text(text)
+
+
+async def cmd_bindtopic(update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> None:
+    if not _is_manager(ctx, update):
+        return await _deny(update)
+    msg = update.effective_message
+    arg = (ctx.args[0].lower() if ctx.args else "")
+    kind = {"план": "plan", "plan": "plan", "факт": "fact", "fact": "fact"}.get(arg)
+    if not kind or not msg.is_topic_message:
+        await msg.reply_text("Отправь эту команду внутри темы форума: /bindtopic план или /bindtopic факт")
+        return
+    _store(ctx).set_setting(f"topic:{msg.chat_id}:{msg.message_thread_id}", kind)
+    if not _partners_chat(ctx):
+        _store(ctx).set_setting("partners_chat_id", str(msg.chat_id))
+    await msg.reply_text(f"✅ Эта тема — {'план' if kind == 'plan' else 'факт'}. Читаю отсюда сообщения партнёров.")
+
+
+async def cmd_setkey(update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> None:
+    msg = update.effective_message
+    if update.effective_chat.type != "private":
+        try:
+            await msg.delete()
+        except Exception:
+            pass
+        await ctx.bot.send_message(msg.chat_id, "Ключ можно присылать только в личку боту — сообщение удалила.")
+        return
+    if not _is_manager(ctx, update):
+        return await _deny(update)
+    key = (ctx.args[0] if ctx.args else "").strip()
+    try:
+        await msg.delete()  # не держим ключ в истории чата
+    except Exception:
+        pass
+    if not key.startswith("sk-ant-"):
+        await ctx.bot.send_message(msg.chat_id, "Пришли так: /setkey sk-ant-… (ключ из console.anthropic.com)")
+        return
+    _store(ctx).set_setting("anthropic_key", key)
+    ctx.application.bot_data.pop("parser", None)
+    await ctx.bot.send_message(msg.chat_id, "✅ Ключ сохранила, сообщение с ним удалила. "
+                                             "Теперь разбираю план и факт партнёров через ИИ.")
 
 
 # ---------- расписание ----------
@@ -408,6 +539,9 @@ def main() -> None:
     app.add_handler(CommandHandler("bindchat", cmd_bindchat))
     app.add_handler(CommandHandler("status", cmd_status))
     app.add_handler(CommandHandler("setsheet", cmd_setsheet))
+    app.add_handler(CommandHandler("bindtopic", cmd_bindtopic))
+    app.add_handler(CommandHandler("setkey", cmd_setkey))
+    app.add_handler(CallbackQueryHandler(on_newlead, pattern=r"^newlead:"))
     app.add_handler(MessageHandler(
         filters.UpdateType.MESSAGES & (filters.TEXT | filters.CAPTION) & ~filters.COMMAND,
         on_message))

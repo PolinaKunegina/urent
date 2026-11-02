@@ -22,6 +22,7 @@ class Config:
     weekly_day: int | None = 0               # 0 = понедельник, None = без недельной сводки
     tz: ZoneInfo = ZoneInfo("Europe/Moscow")
     exclude_status_regex: str = r"отказ"
+    closed_status_regex: str = r"стал ментором|оплатил пакет|240"   # сделка закрыта, касание не нужно
     db_path: str = "data/bot.db"
     write_back: bool = True                  # подсветка и лист с часами (нужна Google Таблица)
     hours_tab: str = "Часы из чата"
@@ -69,6 +70,7 @@ def load_config() -> Config:
         weekly_day=None if weekly.lower() in {"off", "-", ""} else int(weekly),
         tz=ZoneInfo(env("TZ_NAME", "Europe/Moscow")),
         exclude_status_regex=env("EXCLUDE_STATUS_REGEX", r"отказ"),
+        closed_status_regex=env("CLOSED_STATUS_REGEX", r"стал ментором|оплатил пакет|240"),
         db_path=env("DB_PATH", "data/bot.db"),
         write_back=_bool(env("WRITE_BACK", "on")),
         hours_tab=env("HOURS_TAB", "Часы из чата"),

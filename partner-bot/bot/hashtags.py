@@ -59,6 +59,7 @@ class Entry:
     process: str
     hours: float
     note: str
+    people: int | None = None
 
 
 @dataclass
@@ -140,6 +141,10 @@ CREATE TABLE IF NOT EXISTS users (
     full_name TEXT,
     private_ok INTEGER DEFAULT 0   -- написал боту /start, значит можно писать в личку
 );
+CREATE TABLE IF NOT EXISTS pending (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    chat_id INTEGER, user_id INTEGER, partner TEXT, payload TEXT, created_at TEXT
+);
 CREATE TABLE IF NOT EXISTS settings (
     key TEXT PRIMARY KEY,
     value TEXT
@@ -152,26 +157,33 @@ class Store:
         Path(path).parent.mkdir(parents=True, exist_ok=True)
         self.db = sqlite3.connect(path, check_same_thread=False)
         self.db.executescript(SCHEMA)
+        cols = {r[1] for r in self.db.execute("PRAGMA table_info(entries)")}
+        with self.db:
+            if "kind" not in cols:   # план/факт появились позже — докатываем схему
+                self.db.execute("ALTER TABLE entries ADD COLUMN kind TEXT NOT NULL DEFAULT 'fact'")
+            if "people" not in cols:
+                self.db.execute("ALTER TABLE entries ADD COLUMN people INTEGER")
 
     def save(self, chat_id: int, message_id: int, user_id: int | None,
-             partner: str, day: date, report: ParsedReport) -> None:
+             partner: str, day: date, report: ParsedReport, kind: str = "fact") -> None:
         with self.db:
             self.db.execute("DELETE FROM entries WHERE chat_id=? AND message_id=?",
                             (chat_id, message_id))
             for e in report.entries:
                 self.db.execute(
-                    "INSERT INTO entries(chat_id,message_id,user_id,partner,process,hours,note,day,created_at)"
-                    " VALUES (?,?,?,?,?,?,?,?,?)",
+                    "INSERT INTO entries(chat_id,message_id,user_id,partner,process,hours,note,day,"
+                    "created_at,kind,people) VALUES (?,?,?,?,?,?,?,?,?,?,?)",
                     (chat_id, message_id, user_id, partner, e.process, e.hours, e.note,
-                     day.isoformat(), datetime.now().isoformat(timespec="seconds")),
+                     day.isoformat(), datetime.now().isoformat(timespec="seconds"), kind,
+                     getattr(e, "people", None)),
                 )
 
-    def summary(self, start: date, end: date) -> dict[str, dict[str, float]]:
+    def summary(self, start: date, end: date, kind: str = "fact") -> dict[str, dict[str, float]]:
         """{партнёр: {процесс: часы}} за период включительно."""
         rows = self.db.execute(
-            "SELECT partner, process, SUM(hours) FROM entries WHERE day BETWEEN ? AND ?"
+            "SELECT partner, process, SUM(hours) FROM entries WHERE day BETWEEN ? AND ? AND kind=?"
             " GROUP BY partner, process ORDER BY partner",
-            (start.isoformat(), end.isoformat()),
+            (start.isoformat(), end.isoformat(), kind),
         ).fetchall()
         out: dict[str, dict[str, float]] = {}
         for partner, process, hours in rows:
@@ -203,6 +215,21 @@ class Store:
                               (username.lstrip("@").lower(),)).fetchone()
         return (row[0], bool(row[1])) if row else None
 
+    def add_pending(self, chat_id: int, user_id: int, partner: str, payload: str) -> int:
+        with self.db:
+            cur = self.db.execute(
+                "INSERT INTO pending(chat_id,user_id,partner,payload,created_at) VALUES (?,?,?,?,?)",
+                (chat_id, user_id, partner, payload, datetime.now().isoformat(timespec="seconds")))
+        return cur.lastrowid
+
+    def pop_pending(self, pid: int) -> tuple | None:
+        row = self.db.execute("SELECT chat_id,user_id,partner,payload FROM pending WHERE id=?",
+                              (pid,)).fetchone()
+        if row:
+            with self.db:
+                self.db.execute("DELETE FROM pending WHERE id=?", (pid,))
+        return row
+
     def get_setting(self, key: str) -> str | None:
         row = self.db.execute("SELECT value FROM settings WHERE key=?", (key,)).fetchone()
         return row[0] if row else None
@@ -215,12 +242,12 @@ class Store:
     def all_entries(self) -> list[tuple]:
         """Для выгрузки в Google Таблицу: (день, партнёр, процесс, часы, заметка, username)."""
         return self.db.execute(
-            "SELECT e.day, e.partner, e.process, e.hours, e.note, COALESCE(u.username, '')"
-            " FROM entries e LEFT JOIN users u ON u.user_id = e.user_id"
+            "SELECT e.day, e.partner, e.process, e.hours, e.note, COALESCE(u.username, ''), e.kind,"
+            " e.people FROM entries e LEFT JOIN users u ON u.user_id = e.user_id"
             " ORDER BY e.day DESC, e.partner").fetchall()
 
     def partners_reported(self, day: date) -> set[str]:
-        rows = self.db.execute("SELECT DISTINCT partner FROM entries WHERE day=?",
+        rows = self.db.execute("SELECT DISTINCT partner FROM entries WHERE day=? AND kind='fact'",
                                (day.isoformat(),)).fetchall()
         return {r[0] for r in rows}
 

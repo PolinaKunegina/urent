@@ -133,6 +133,16 @@ class Funnel:
     headers: list[str]  # заголовки в нижнем регистре
     name_col: int       # индекс колонки «Имя лида» (0-based)
     last_row: int       # последняя строка листа
+    cols: dict = field(default_factory=dict)        # number/name/source/status/description -> индекс
+    touch_cols: list = field(default_factory=list)  # [(n, индекс даты, индекс формата|None)]
+    empty_rows: list = field(default_factory=list)  # строки-заготовки без имени (для новых лидов)
+
+    def find(self, name: str) -> "Lead | None":
+        key = " ".join(sorted(re.findall(r"\w+", name.lower().replace("ё", "е"))))
+        for l in self.leads:
+            if " ".join(sorted(re.findall(r"\w+", l.name.lower().replace("ё", "е")))) == key:
+                return l
+        return None
 
 
 def parse_funnel(xlsx: bytes, tab: str = "Воронка лидов") -> Funnel:
@@ -175,10 +185,11 @@ def parse_funnel(xlsx: bytes, tab: str = "Воронка лидов") -> Funnel:
         idx = col.get(key)
         return row[idx] if idx is not None and idx < len(row) else None
 
-    leads = []
+    leads, empty_rows = [], []
     for r_idx, row in enumerate(ws.iter_rows(min_row=header_row + 1, values_only=True), header_row + 1):
         name = _clean(cell(row, "name"))
         if not name:
+            empty_rows.append(r_idx)
             continue
         touches = []
         for n, d_idx, f_idx in touch_cols:
@@ -199,8 +210,10 @@ def parse_funnel(xlsx: bytes, tab: str = "Воронка лидов") -> Funnel:
     last_row = ws.max_row or header_row
     title = ws.title
     wb.close()
+    last_lead = max((l.row for l in leads), default=header_row)
     return Funnel(leads=leads, tab=title, header_row=header_row, headers=headers,
-                  name_col=col["name"], last_row=last_row)
+                  name_col=col["name"], last_row=last_row, cols=col, touch_cols=touch_cols,
+                  empty_rows=[r for r in empty_rows if r > last_lead])
 
 
 # ---------- лист «Партнёры» ----------

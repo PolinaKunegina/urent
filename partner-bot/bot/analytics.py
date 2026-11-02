@@ -49,6 +49,7 @@ class FunnelStats:
     statuses: Counter
     plan: dict[int, str]          # строка таблицы -> значение служебной колонки
     lead_partner: dict[int, str]  # строка таблицы -> партнёр
+    closed: list[Lead] = field(default_factory=list)  # сделка закрыта, касание не нужно
 
     def _all(self, attr):
         return [x for p in self.partners.values() for x in getattr(p, attr)]
@@ -71,9 +72,11 @@ class FunnelStats:
 
 
 def compute(leads: list[Lead], today: date, exclude_status_regex: str,
-            directory: Directory | None = None) -> FunnelStats:
+            directory: Directory | None = None, closed_status_regex: str = "") -> FunnelStats:
     directory = directory or Directory([])
     rx = re.compile(exclude_status_regex, re.IGNORECASE) if exclude_status_regex else None
+    crx = re.compile(closed_status_regex, re.IGNORECASE) if closed_status_regex else None
+    closed: list[Lead] = []
     tomorrow = today + timedelta(days=1)
     partners: dict[str, PartnerStats] = {}
     refused, plan, lead_partner = [], {}, {}
@@ -83,6 +86,10 @@ def compute(leads: list[Lead], today: date, exclude_status_regex: str,
         if rx and l.status and rx.search(l.status):
             refused.append(l)
             plan[l.row] = "отказ"
+            continue
+        if crx and l.status and crx.search(l.status):
+            closed.append(l)
+            plan[l.row] = "закрыт"
             continue
         ps = partners.setdefault(pname, PartnerStats(name=pname, known=known))
         ps.active.append(l)
@@ -105,6 +112,7 @@ def compute(leads: list[Lead], today: date, exclude_status_regex: str,
         statuses=Counter(l.status or "без статуса" for l in active),
         plan=plan,
         lead_partner=lead_partner,
+        closed=closed,
     )
 
 
@@ -130,6 +138,7 @@ def render_morning(s: FunnelStats, hours_block: str | None = None,
     out.append(
         f"В работе: <b>{len(s.active)}</b> · сегодня: <b>{len(s.today)}</b>"
         f" · завтра: <b>{len(s.tomorrow)}</b> · 🔴 без плана: <b>{len(s.unplanned)}</b>"
+        + (f" · закрыто: {len(s.closed)}" if s.closed else "")
         + (f" · отказов: {len(s.refused)}" if s.refused else ""))
 
     out.append("")
@@ -172,17 +181,27 @@ def render_morning(s: FunnelStats, hours_block: str | None = None,
 
 
 def render_hours(day_data: dict[str, dict[str, float]], week: dict[str, dict[str, float]],
-                 expected_partners: list[str], day: date) -> str:
-    out = [f"⏱ <b>Часы по процессам за {day:%d.%m}</b> (из чата)"]
-    if day_data:
-        for partner, procs in sorted(day_data.items()):
-            parts = [f"{SHORT_PROCESS[p]} {fmt_hours(procs.get(p, 0))}" for p in PROCESS_ORDER]
-            out.append(f"  • {e(partner)}: {' · '.join(parts)} = <b>{fmt_hours(sum(procs.values()))}</b>")
+                 expected_partners: list[str], day: date,
+                 plan_data: dict[str, dict[str, float]] | None = None) -> str:
+    plan_data = plan_data or {}
+    out = [f"⏱ <b>Часы по процессам за {day:%d.%m}</b> (факт из чата, в скобках план)"]
+    names = sorted(set(day_data) | set(plan_data), key=str.lower)
+    if names:
+        for partner in names:
+            fact, plan = day_data.get(partner, {}), plan_data.get(partner)
+            parts = []
+            for p in PROCESS_ORDER:
+                s = f"{SHORT_PROCESS[p]} {fmt_hours(fact.get(p, 0))}"
+                if plan is not None:
+                    s += f" ({fmt_hours(plan.get(p, 0))})"
+                parts.append(s)
+            total = f"<b>{fmt_hours(sum(fact.values()))}</b>" if fact else "<b>факта нет</b>"
+            out.append(f"  • {e(partner)}: {' · '.join(parts)} = {total}")
     else:
-        out.append("  отчётов с хэштегами не было")
+        out.append("  отчётов не было")
     silent = not_reported(expected_partners, day_data)
     if silent:
-        out.append(f"  🔕 Не отчитались: {e(', '.join(silent))}")
+        out.append(f"  🔕 Не прислали факт: {e(', '.join(silent))}")
     if week:
         totals = {p: sum(week[x].get(p, 0) for x in week) for p in PROCESS_ORDER}
         all_h = sum(totals.values()) or 1

@@ -172,13 +172,13 @@ def test_reports_end_to_end(tmp_path):
 
     morning = morning_report(cfg, snap, st, TODAY)
     assert "Петрова Анна: знакомство 0 ч · прогрев 1,5 ч · сделки 0 ч" in morning
-    assert "Не отчитались: Ментор" in morning
+    assert "Не прислали факт: Ментор" in morning
 
     weekly = weekly_report(snap, st, TODAY)
     assert "Итоги недели 27.10–02.11" in weekly
     assert "<b>Петрова Анна</b>: касаний 2, новых 2" in weekly  # Орлов 29.10, Жуков 28.10
 
-    assert "ещё нет отчёта от: Петрова Анна, Ментор" in evening_chat_text(snap, st, TODAY)
+    assert "ещё нет факта от: Петрова Анна, Ментор" in evening_chat_text(snap, st, TODAY)
     ev = evening_partner_texts(snap, TODAY)
     assert set(ev) == {"Петрова Анна", "Ментор"}
     assert "Орлов Пётр" in ev["Петрова Анна"] and "Лисина Ада" in ev["Петрова Анна"]
@@ -286,7 +286,142 @@ def test_write_back_creates_partners_tab(tmp_path):
     assert report.write_back(cfg, snap, st, session=sess) is None
     puts = {c[2]["range"]: c[2]["values"] for c in sess.calls if c[0] == "PUT"}
     assert puts["'Партнёры'!A1"][1:] == [["Анна Петрова", "", ""], ["Аня П.", "", ""], ["ментор", "", ""]]
-    assert puts["'Часы из чата'!A1"][1] == ["2026-11-03", "Петрова Анна", "Сделки и закрытие", 1.0,
-                                           "договор", ""]
+    assert puts["'Часы из чата'!A1"][1] == ["2026-11-03", "Петрова Анна", "факт", "Сделки и закрытие",
+                                           1.0, "", "договор", ""]
     snap.is_gsheet = False
     assert "xlsx" in report.write_back(cfg, snap, st, session=sess)
+
+
+# ---------- план/факт через ИИ (с подставным разборщиком) ----------
+
+class FakeParser:
+    def __init__(self, data):
+        self.data, self.calls = data, []
+
+    def parse(self, text, kind, partner, today, leads, statuses):
+        self.calls.append((text, kind, partner, leads, statuses))
+        return self.data
+
+
+def _client(name, matched=None, **kw):
+    base = {"name_in_message": name, "matched_lead": matched, "status": None, "description": None,
+            "touch_today": False, "touch_format": None, "next_touch_date": None,
+            "no_next_touch_reason": None}
+    base.update(kw)
+    return base
+
+
+def test_detect_kind(tmp_path):
+    from bot.flow import detect_kind
+    st = Store(str(tmp_path / "t.db"))
+    st.set_setting("topic:-100:7", "fact")
+    assert detect_kind(st, -100, 7, "что угодно") == "fact"
+    assert detect_kind(st, -100, None, "План на сегодня: …") == "plan"
+    assert detect_kind(st, -100, None, "#факт\nзнакомство 2 ч") == "fact"
+    assert detect_kind(st, -100, None, "#план_Сергиенко …") == "plan"
+    assert detect_kind(st, -100, None, "привет всем") is None
+
+
+def test_fact_flow_updates_table(tmp_path):
+    from bot.flow import confirm_new_lead, process_report
+    cfg = Config(sheet_id="ID", partners_file="/nonexistent")
+    st = Store(str(tmp_path / "t.db"))
+    parser = FakeParser({
+        "processes": [{"process": "warmup", "hours": 1.5, "people": 2, "note": "переписка"},
+                      {"process": "deal", "hours": 0, "people": None, "note": ""}],
+        "clients": [
+            _client("Петя Орлов", "Орлов Пётр", status="Вторая встреча", description="созвонились",
+                    touch_today=True, touch_format="созвон", next_touch_date="2026-11-06"),
+            _client("Ева Лисина", "Лисина Ева", touch_today=True, touch_format="переписка"),
+            _client("Новикова Дарья", None, status="Была на встрече", touch_today=True,
+                    touch_format="встреча", next_touch_date="2026-11-05"),
+        ],
+        "questions": ["Уточни фамилию Маши"],
+    })
+    sess = FakeSession()
+    import bot.report as rep
+    orig = rep.load_snapshot
+
+    def fake_snapshot(cfg_, today, local_xlsx=None, session=None):
+        snap = orig(cfg_, today, local_xlsx=make_xlsx(ROWS))
+        snap.is_gsheet = True
+        return snap
+    import bot.flow as flow
+    flow.load_snapshot = fake_snapshot
+    try:
+        out = process_report(cfg, st, parser, text="Факт …", kind="fact", partner="Анна Петрова",
+                             today=TODAY, chat_id=1, message_id=5, user_id=9, session=sess)
+        assert "прогрев 1,5 ч (2 чел.) · сделки 0 ч" in out.reply
+        assert "Орлов Пётр — статус «Вторая встреча», касание 2 сегодня (созвон), след. касание 06.11" in out.reply
+        assert "Уточни фамилию Маши" in out.reply
+        assert [n for _, n in out.pending] == ["Новикова Дарья"]
+        assert st.summary(TODAY, TODAY) == {"Анна Петрова": {"warmup": 1.5, "deal": 0.0}}
+        assert parser.calls[0][3][0]["name"] == "Котова Вера"   # лиды ушли в запрос
+
+        batch = [c for c in sess.calls if c[0] == "POST" and c[1].endswith("values:batchUpdate")][0][2]
+        cells = {d["range"]: d["values"][0][0] for d in batch["data"]}
+        # Орлов Пётр — строка 5: статус N, описание O, касание 2 = F/G, касание 3 = H
+        assert cells["'Воронка лидов'!N5"] == "Вторая встреча"
+        assert cells["'Воронка лидов'!O5"] == "03.11: созвонились"
+        assert cells["'Воронка лидов'!F5"] == "03.11.2026" and cells["'Воронка лидов'!G5"] == "созвон"
+        assert cells["'Воронка лидов'!H5"] == "06.11.2026"
+        # Лисина Ева (строка 7): касание 2 сегодня
+        assert cells["'Воронка лидов'!F7"] == "03.11.2026"
+
+        sess2 = FakeSession()
+        pid = out.pending[0][0]
+        msg = confirm_new_lead(cfg, st, pid, TODAY, session=sess2)
+        assert msg.startswith("✅ Добавила в таблицу: Новикова Дарья")
+        batch = [c for c in sess2.calls if c[0] == "POST"][0][2]
+        cells = {d["range"]: d["values"][0][0] for d in batch["data"]}
+        row = 10  # первая пустая строка после последнего лида (строки 10 и 11 — заготовки)
+        assert cells[f"'Воронка лидов'!B{row}"] == "Новикова Дарья"
+        assert cells[f"'Воронка лидов'!C{row}"] == "Анна Петрова"
+        assert cells[f"'Воронка лидов'!D{row}"] == "03.11.2026"
+        assert cells[f"'Воронка лидов'!F{row}"] == "05.11.2026"
+        assert confirm_new_lead(cfg, st, pid, TODAY, session=sess2) == "Этот вопрос уже закрыт."
+    finally:
+        flow.load_snapshot = orig
+
+
+def test_plan_flow_xlsx_only_hours(tmp_path):
+    from bot.flow import process_report
+    import bot.flow as flow
+    import bot.report as rep
+    orig = rep.load_snapshot
+    flow.load_snapshot = lambda c, t, local_xlsx=None, session=None: orig(c, t, local_xlsx=make_xlsx(ROWS))
+    try:
+        st = Store(str(tmp_path / "t.db"))
+        parser = FakeParser({"processes": [{"process": "intro", "hours": 3, "people": None, "note": "нетворкинг"}],
+                             "clients": [], "questions": []})
+        out = process_report(Config(partners_file="/x"), st, parser, text="План", kind="plan",
+                             partner="Ментор", today=TODAY, chat_id=1, message_id=1, user_id=1)
+        assert "Записала план на день — Ментор" in out.reply
+        assert st.summary(TODAY, TODAY, "plan") == {"Ментор": {"intro": 3.0}}
+        assert st.summary(TODAY, TODAY) == {}
+    finally:
+        flow.load_snapshot = orig
+
+
+def test_llm_schema_is_strict():
+    from bot.llm import SCHEMA, build_prompt
+    def walk(node):
+        if node.get("type") == "object":
+            assert node["additionalProperties"] is False
+            assert set(node["required"]) == set(node["properties"])
+            for v in node["properties"].values():
+                walk(v)
+        if node.get("type") == "array":
+            walk(node["items"])
+    walk(SCHEMA)
+    p = build_prompt("текст", "fact", "Анна", TODAY, [{"name": "X"}], ["Касание 1"])
+    assert "ФАКТ за день" in p and "2026-11-03 (вт)" in p and "Касание 1" in p
+
+
+def test_closed_status_not_red():
+    rows = ROWS[:2] + [[30, "Ильин Олег", "Анна Петрова", "20.10.2026", None, None, None, None, None,
+                        None, None, None, None, "Оплатил пакет 240, стал ментором"]]
+    s = compute(parse_funnel(make_xlsx(rows)).leads, TODAY, "отказ", DIRECTORY, "стал ментором|240")
+    assert [l.name for l in s.closed] == ["Ильин Олег"]
+    assert "Ильин Олег" not in [l.name for l in s.unplanned]
+    assert "закрыто: 1" in render_morning(s)
