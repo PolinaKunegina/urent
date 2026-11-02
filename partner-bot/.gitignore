@@ -1,0 +1,7 @@
+.env
+secrets/
+data/*
+!data/.gitkeep
+__pycache__/
+*.pyc
+.pytest_cache/

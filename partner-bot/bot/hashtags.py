@@ -1,0 +1,184 @@
+"""Учёт процессов из чата партнёров.
+
+Партнёр пишет в чат сообщение по эталону:
+
+    #отчет #план_Сергиенко
+    #знакомство 2 ч — презентация экосистемы для Котовой
+    #прогрев 1,5 ч — переписка с Соколовой, отправила кейсы
+    #сделка 30 мин — Жуков: согласовали пакет, ждём оплату
+
+Бот вытаскивает процесс и часы по каждой строке и складывает в SQLite.
+Отредактированное сообщение пересчитывается целиком, поэтому опечатку в часах
+можно просто исправить в Telegram.
+"""
+from __future__ import annotations
+
+import re
+import sqlite3
+from dataclasses import dataclass
+from datetime import date, datetime, timedelta
+from pathlib import Path
+
+# ключ процесса -> (название в отчёте, корни слов для хэштегов и ключевых слов)
+PROCESSES: dict[str, tuple[str, tuple[str, ...]]] = {
+    "intro": ("Знакомство с экосистемой", ("знакомств", "экосистем")),
+    "warmup": ("Прогрев", ("прогрев",)),
+    "deal": ("Сделки и закрытие", ("сделк", "закрыти")),
+}
+PROCESS_ORDER = ["intro", "warmup", "deal"]
+
+TAG_RE = re.compile(r"#([\w]+)", re.UNICODE)
+PARTNER_TAG_RE = re.compile(r"#(?:план|партнер|партнёр)_([\w]+)", re.IGNORECASE | re.UNICODE)
+HOURS_RE = re.compile(r"(\d+(?:[.,]\d+)?)\s*(?:ч\b|час\w*|h\b)", re.IGNORECASE | re.UNICODE)
+MINUTES_RE = re.compile(r"(\d+)\s*мин\w*", re.IGNORECASE | re.UNICODE)
+HHMM_RE = re.compile(r"\b(\d{1,2}):(\d{2})\b")
+
+
+def process_of(word: str) -> str | None:
+    w = word.lower()
+    for key, (_, roots) in PROCESSES.items():
+        if any(w.startswith(r) for r in roots):
+            return key
+    return None
+
+
+def hours_in(line: str) -> float:
+    total = 0.0
+    for m in HOURS_RE.finditer(line):
+        total += float(m.group(1).replace(",", "."))
+    for m in MINUTES_RE.finditer(line):
+        total += int(m.group(1)) / 60
+    if total == 0:
+        for m in HHMM_RE.finditer(line):  # «1:30» — тоже часы
+            total += int(m.group(1)) + int(m.group(2)) / 60
+    return round(total, 2)
+
+
+@dataclass
+class Entry:
+    process: str
+    hours: float
+    note: str
+
+
+@dataclass
+class ParsedReport:
+    partner: str | None
+    entries: list[Entry]
+    has_tags: bool          # были ли вообще процессные хэштеги
+
+    @property
+    def missing_hours(self) -> list[str]:
+        return [e.process for e in self.entries if e.hours == 0]
+
+
+def parse_message(text: str) -> ParsedReport | None:
+    """None, если в сообщении нет ни одного процессного хэштега — это не отчёт."""
+    if not text:
+        return None
+    tags = [t.lower() for t in TAG_RE.findall(text)]
+    if not any(process_of(t) for t in tags):
+        return None
+
+    pm = PARTNER_TAG_RE.search(text)
+    partner = pm.group(1).replace("_", " ") if pm else None
+
+    entries: dict[str, Entry] = {}
+    current: str | None = None
+    for raw_line in text.splitlines():
+        line = raw_line.strip()
+        if not line:
+            continue
+        found = None
+        for t in TAG_RE.findall(line):
+            found = process_of(t) or found
+        if not found:
+            # строка вида «2. Прогрев — 1 ч» без решётки внутри отчёта
+            head = re.sub(r"^[\d.)\-•\s]+", "", line).split(" ")[0]
+            found = process_of(head)
+        if found:
+            current = found
+        if current is None:
+            continue
+        h = hours_in(line)
+        note = TAG_RE.sub("", line).strip(" -—:")
+        e = entries.setdefault(current, Entry(current, 0.0, ""))
+        e.hours = round(e.hours + h, 2)
+        if note and found:
+            e.note = (e.note + "; " if e.note else "") + note
+    return ParsedReport(partner=partner, entries=list(entries.values()), has_tags=True)
+
+
+# ---------- хранилище ----------
+
+SCHEMA = """
+CREATE TABLE IF NOT EXISTS entries (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    chat_id INTEGER NOT NULL,
+    message_id INTEGER NOT NULL,
+    user_id INTEGER,
+    partner TEXT NOT NULL,
+    process TEXT NOT NULL,
+    hours REAL NOT NULL,
+    note TEXT,
+    day TEXT NOT NULL,          -- YYYY-MM-DD по часовому поясу команды
+    created_at TEXT NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_entries_day ON entries(day);
+CREATE INDEX IF NOT EXISTS idx_entries_msg ON entries(chat_id, message_id);
+CREATE TABLE IF NOT EXISTS partners (
+    user_id INTEGER PRIMARY KEY,
+    partner TEXT NOT NULL
+);
+"""
+
+
+class Store:
+    def __init__(self, path: str):
+        Path(path).parent.mkdir(parents=True, exist_ok=True)
+        self.db = sqlite3.connect(path, check_same_thread=False)
+        self.db.executescript(SCHEMA)
+
+    def save(self, chat_id: int, message_id: int, user_id: int | None,
+             partner: str, day: date, report: ParsedReport) -> None:
+        with self.db:
+            self.db.execute("DELETE FROM entries WHERE chat_id=? AND message_id=?",
+                            (chat_id, message_id))
+            for e in report.entries:
+                self.db.execute(
+                    "INSERT INTO entries(chat_id,message_id,user_id,partner,process,hours,note,day,created_at)"
+                    " VALUES (?,?,?,?,?,?,?,?,?)",
+                    (chat_id, message_id, user_id, partner, e.process, e.hours, e.note,
+                     day.isoformat(), datetime.now().isoformat(timespec="seconds")),
+                )
+
+    def summary(self, start: date, end: date) -> dict[str, dict[str, float]]:
+        """{партнёр: {процесс: часы}} за период включительно."""
+        rows = self.db.execute(
+            "SELECT partner, process, SUM(hours) FROM entries WHERE day BETWEEN ? AND ?"
+            " GROUP BY partner, process ORDER BY partner",
+            (start.isoformat(), end.isoformat()),
+        ).fetchall()
+        out: dict[str, dict[str, float]] = {}
+        for partner, process, hours in rows:
+            out.setdefault(partner, {})[process] = round(hours or 0, 2)
+        return out
+
+    def remember_partner(self, user_id: int, partner: str) -> None:
+        with self.db:
+            self.db.execute("INSERT INTO partners(user_id, partner) VALUES (?, ?)"
+                            " ON CONFLICT(user_id) DO UPDATE SET partner=excluded.partner",
+                            (user_id, partner))
+
+    def partner_for(self, user_id: int) -> str | None:
+        row = self.db.execute("SELECT partner FROM partners WHERE user_id=?", (user_id,)).fetchone()
+        return row[0] if row else None
+
+    def partners_reported(self, day: date) -> set[str]:
+        rows = self.db.execute("SELECT DISTINCT partner FROM entries WHERE day=?",
+                               (day.isoformat(),)).fetchall()
+        return {r[0] for r in rows}
+
+
+def last_days(today: date, days: int) -> tuple[date, date]:
+    return today - timedelta(days=days), today - timedelta(days=1)
