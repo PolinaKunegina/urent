@@ -33,8 +33,8 @@ log = logging.getLogger("partner-bot")
 TEMPLATE = (
     "<b>Как писать план и факт</b>\n\n"
     "Пиши как удобно, своими словами: бот на ИИ сам разберёт сообщение и внесёт в таблицу.\n"
-    "Утром — в тему <b>План</b>, вечером до 19:00 — в тему <b>Факт</b> "
-    "(или начни сообщение со слова «План» / «Факт»).\n\n"
+    "Пиши в тему <b>План/Факт</b>: утром план, вечером до 19:00 факт. "
+    "Лучше начинать со слова «План» или «Факт» — тогда бот точно не перепутает.\n\n"
     "<b>Пример факта:</b>\n"
     "<code>Факт\n"
     "Знакомство с экосистемой — 2 ч: нетворкинг в бизнес-клубе, пригласила 3 человек на четверг.\n"
@@ -60,7 +60,7 @@ HELP = (
     "/status — проверка настроек (руководителям)\n"
     "/bindchat — сделать этот чат чатом партнёров (руководителям)\n"
     "/setsheet ссылка — переключить бота на другую таблицу (руководителям)\n"
-    "/bindtopic план | факт — отправить в теме форума, чтобы бот читал её (руководителям)\n"
+    "/bindtopic — отправить в теме «План/Факт», чтобы бот читал её (руководителям)\n"
     "/setkey ключ — ключ Claude для разбора сообщений, только в личке (руководителям)"
 )
 
@@ -315,8 +315,9 @@ async def cmd_status(update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> None:
     with store.db:
         topics = store.db.execute("SELECT key, value FROM settings WHERE key LIKE 'topic:%'").fetchall()
     bound = {v for _, v in topics}
-    lines.append("Темы: " + ", ".join(f"{'план' if k == 'plan' else 'факт'} ✅" for k in sorted(bound))
-                 if bound else "⚠️ Темы План/Факт не привязаны: /bindtopic в каждой теме")
+    names = {"plan": "план", "fact": "факт", "both": "План/Факт"}
+    lines.append("Темы: " + ", ".join(f"{names.get(k, k)} ✅" for k in sorted(bound))
+                 if bound else "⚠️ Тема План/Факт не привязана: отправь /bindtopic внутри неё")
     rt = cfg.reminder_time.strftime("%H:%M") if cfg.reminder_time else "выкл"
     lines.append(f"Сводка в {cfg.report_time:%H:%M}, напоминание в {rt}")
     await _send(ctx, update.effective_chat.id, "\n".join(lines))
@@ -346,7 +347,7 @@ async def on_message(update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> None:
     text = msg.text or msg.caption or ""
     store, cfg = _store(ctx), _cfg(ctx)
     thread_id = msg.message_thread_id if msg.is_topic_message else None
-    kind = detect_kind(store, chat.id, thread_id, text)
+    kind = detect_kind(store, chat.id, thread_id, text, hour=msg.date.astimezone(cfg.tz).hour)
     parser = _parser(ctx)
 
     if kind and parser:
@@ -426,15 +427,19 @@ async def cmd_bindtopic(update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> None:
     if not _is_manager(ctx, update):
         return await _deny(update)
     msg = update.effective_message
-    arg = (ctx.args[0].lower() if ctx.args else "")
-    kind = {"план": "plan", "plan": "plan", "факт": "fact", "fact": "fact"}.get(arg)
-    if not kind or not msg.is_topic_message:
-        await msg.reply_text("Отправь эту команду внутри темы форума: /bindtopic план или /bindtopic факт")
+    arg = " ".join(ctx.args or []).lower().replace(" ", "")
+    kind = {"план": "plan", "plan": "plan", "факт": "fact", "fact": "fact"}.get(arg, "both")
+    if not msg.is_topic_message:
+        await msg.reply_text("Отправь эту команду внутри темы форума, куда партнёры пишут план и факт.")
         return
     _store(ctx).set_setting(f"topic:{msg.chat_id}:{msg.message_thread_id}", kind)
-    if not _partners_chat(ctx):
-        _store(ctx).set_setting("partners_chat_id", str(msg.chat_id))
-    await msg.reply_text(f"✅ Эта тема — {'план' if kind == 'plan' else 'факт'}. Читаю отсюда сообщения партнёров.")
+    _store(ctx).set_setting("partners_chat_id", str(msg.chat_id))
+    _store(ctx).set_setting("reminder_thread", f"{msg.chat_id}:{msg.message_thread_id}")
+    what = {"plan": "план", "fact": "факт",
+            "both": "план и факт. Если сообщение не начинается со слова «План» или «Факт», "
+                    "до 14:00 считаю его планом, после — фактом"}[kind]
+    await msg.reply_text(f"✅ Эта тема — {what}. Читаю отсюда сообщения партнёров, "
+                         "вечернее напоминание тоже буду присылать сюда.")
 
 
 async def on_bare_key(update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> None:
@@ -497,9 +502,15 @@ async def job_evening(ctx: ContextTypes.DEFAULT_TYPE) -> None:
     snap = await _snapshot(ctx)
     await asyncio.to_thread(write_back, cfg, snap, store)
     chat = _partners_chat(ctx)
+    thread = None
+    rt = store.get_setting("reminder_thread")
+    if rt and chat and rt.startswith(f"{chat}:"):
+        thread = int(rt.split(":")[1])
     if chat:
         try:
-            await _send(ctx, chat, evening_chat_text(snap, store, today))
+            for chunk in split_message(evening_chat_text(snap, store, today)):
+                await ctx.bot.send_message(chat, chunk, parse_mode=ParseMode.HTML,
+                                           message_thread_id=thread, disable_web_page_preview=True)
         except Exception:
             log.exception("Не удалось отправить напоминание в чат")
     d = _dir(ctx)

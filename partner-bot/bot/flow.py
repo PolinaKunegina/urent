@@ -21,15 +21,22 @@ log = logging.getLogger(__name__)
 KIND_RE = re.compile(r"^\W*#?(план|факт)", re.IGNORECASE)
 
 
-def detect_kind(store: Store, chat_id: int, thread_id: int | None, text: str) -> str | None:
-    """plan / fact по теме форума или по первому слову сообщения."""
+PLAN_UNTIL_HOUR = 14   # в общей теме «План/Факт» без слова-подсказки: до 14:00 — план
+
+
+def detect_kind(store: Store, chat_id: int, thread_id: int | None, text: str,
+                hour: int | None = None) -> str | None:
+    """plan / fact: по слову в начале сообщения, по привязанной теме, а в общей теме
+    «План/Факт» без подсказки — по времени (утром план, после обеда факт)."""
+    m = KIND_RE.match(text or "")
+    if m:
+        return "plan" if m.group(1).lower() == "план" else "fact"
     if thread_id:
         bound = store.get_setting(f"topic:{chat_id}:{thread_id}")
         if bound in ("plan", "fact"):
             return bound
-    m = KIND_RE.match(text or "")
-    if m:
-        return "plan" if m.group(1).lower() == "план" else "fact"
+        if bound == "both" and hour is not None:
+            return "plan" if hour < PLAN_UNTIL_HOUR else "fact"
     return None
 
 

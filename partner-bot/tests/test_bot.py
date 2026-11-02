@@ -320,6 +320,11 @@ def test_detect_kind(tmp_path):
     assert detect_kind(st, -100, None, "#факт\nзнакомство 2 ч") == "fact"
     assert detect_kind(st, -100, None, "#план_Сергиенко …") == "plan"
     assert detect_kind(st, -100, None, "привет всем") is None
+    st.set_setting("topic:-100:107", "both")
+    assert detect_kind(st, -100, 107, "сегодня 2 ч на прогрев", hour=9) == "plan"
+    assert detect_kind(st, -100, 107, "сегодня было 2 ч прогрева", hour=19) == "fact"
+    assert detect_kind(st, -100, 107, "Факт: утром успела 1 ч", hour=10) == "fact"
+    assert detect_kind(st, -100, 8, "без темы", hour=19) is None
 
 
 def test_fact_flow_updates_table(tmp_path):

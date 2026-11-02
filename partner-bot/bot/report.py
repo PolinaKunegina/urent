@@ -124,7 +124,7 @@ def weekly_report(snap: Snapshot, store: Store | None, today: date) -> str | Non
 
 
 def evening_chat_text(snap: Snapshot, store: Store | None, today: date) -> str:
-    text = ("Коллеги, напоминание 🌿 До 19:00 напишите <b>факт за день</b> в тему Факт: "
+    text = ("Коллеги, напоминание 🌿 До 19:00 напишите <b>факт за день</b> в эту тему: "
             "часы на знакомство, прогрев и сделки, и по каждому клиенту — что происходит "
             "и <b>когда следующее касание</b>. Таблицу заполню сама. Пример — /template.")
     if store is not None:
