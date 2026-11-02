@@ -85,7 +85,7 @@ def write_back(cfg: Config, snap: Snapshot, store: Store | None, session=None) -
         log.exception("Не удалось записать в таблицу")
         code = getattr(getattr(exc, "response", None), "status_code", None)
         if code == 403:
-            return "Бот не может писать в таблицу: дайте сервисному аккаунту доступ «Редактор»."
+            return "Бот не может писать в таблицу: дай сервисному аккаунту доступ «Редактор»."
         return f"Не удалось обновить подсветку/часы в таблице: {exc.__class__.__name__}"
     return None
 

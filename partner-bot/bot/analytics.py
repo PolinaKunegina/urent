@@ -203,11 +203,11 @@ def render_partner_evening(p: PartnerStats, today: date) -> str | None:
     if not p.unplanned and not p.tomorrow:
         return None
     tomorrow = today + timedelta(days=1)
-    out = [f"🌿 <b>{e(p.name)}, сводка по вашим лидам</b>"]
+    out = [f"🌿 <b>{e(p.name)}, сводка по твоим лидам</b>"]
     if p.unplanned:
         out.append(f"🔴 Нет даты следующего касания ({len(p.unplanned)}):")
         out += [f"  • {e(l.name)}" for l in p.unplanned]
-        out.append("Поставьте дату в свободную колонку «Дата N-го касания» до 19:00.")
+        out.append("Поставь дату в свободную колонку «Дата N-го касания» до 19:00.")
     if p.tomorrow:
         out.append(f"➡️ Касания завтра, {tomorrow:%d.%m}: " + ", ".join(e(l.name) for l, _ in p.tomorrow))
     return "\n".join(out)

@@ -35,7 +35,7 @@ TEMPLATE = (
     "#прогрев 1,5 ч — переписка с Соколовой, отправила 2 кейса\n"
     "#сделка 30 мин — Жуков: согласовали пакет, ждём оплату</code>\n\n"
     "Часы можно писать так: <code>2 ч</code>, <code>1,5 часа</code>, <code>40 мин</code>, <code>1:30</code>.\n"
-    "Ошиблись — просто отредактируйте сообщение, бот пересчитает.\n"
+    "Если ошибка — просто отредактируй сообщение, я пересчитаю.\n"
     "Отчёт принят, если бот поставил ✍."
 )
 
@@ -146,9 +146,9 @@ async def cmd_start(update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> None:
     lines = [HELP]
     partner = _dir(ctx).by_username(u.username or "")
     if _is_manager(ctx, update) and _cfg(ctx).managers:
-        lines.insert(0, "✅ Вы в списке руководителей: сводка будет приходить сюда каждое утро.\n")
+        lines.insert(0, "✅ Ты в списке руководителей: сводка будет приходить сюда каждое утро.\n")
     elif partner:
-        lines.insert(0, f"✅ Вы партнёр «{partner.name}»: вечером сюда будут приходить ваши лиды без плана.\n")
+        lines.insert(0, f"✅ Ты партнёр «{partner.name}»: вечером сюда будут приходить твои лиды без плана.\n")
     await update.effective_message.reply_text("\n".join(lines))
 
 
@@ -209,13 +209,13 @@ async def cmd_mine(update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> None:
     partner = _dir(ctx).by_username(update.effective_user.username or "")
     if partner is None:
         await update.effective_message.reply_text(
-            "Не нашла вас в списке партнёров. Попросите руководителя добавить ваш @username.")
+            "Не нашла тебя в списке партнёров. Попроси руководителя добавить твой @username.")
         return
     snap = await _snapshot(ctx)
     p = snap.stats.partners.get(partner.name) if snap.stats else None
     text = render_partner_evening(p, _today(_cfg(ctx))) if p else None
     await _send(ctx, update.effective_chat.id,
-                text or f"🟢 {e(partner.name)}, у всех ваших лидов есть дата следующего касания.")
+                text or f"🟢 {e(partner.name)}, у всех твоих лидов есть дата следующего касания.")
 
 
 async def cmd_bindchat(update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> None:
@@ -237,7 +237,7 @@ async def cmd_setsheet(update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> None:
     m = re.search(r"/d/([A-Za-z0-9_-]{20,})", raw) or re.fullmatch(r"([A-Za-z0-9_-]{20,})", raw)
     if not m:
         await update.effective_message.reply_text(
-            "Пришлите команду со ссылкой на таблицу, например:\n/setsheet https://docs.google.com/spreadsheets/d/…/edit")
+            "Пришли команду со ссылкой на таблицу, например:\n/setsheet https://docs.google.com/spreadsheets/d/…/edit")
         return
     cfg = _cfg(ctx)
     old = cfg.sheet_id
@@ -248,7 +248,7 @@ async def cmd_setsheet(update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> None:
         await update.effective_message.reply_text(
             "Не получилось открыть эту таблицу, оставила прежнюю.\n"
             f"{snap.errors[0] if snap.errors else ''}\n\n"
-            "Проверьте, что адресу partners-pulse-bot@partners-pulse.iam.gserviceaccount.com "
+            "Проверь, что адресу partners-pulse-bot@partners-pulse.iam.gserviceaccount.com "
             "дан доступ «Редактор».")
         return
     _store(ctx).set_setting("sheet_id", cfg.sheet_id)
@@ -328,7 +328,7 @@ async def on_message(update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> None:
         names = ", ".join(PROCESSES[m][0].lower() for m in missing)
         await msg.reply_text(
             f"Записала отчёт, но не вижу часов: {names}. "
-            "Допишите, например «#прогрев 1,5 ч — …», можно прямо отредактировать сообщение.")
+            "Допиши, например «#прогрев 1,5 ч — …», можно прямо отредактировать сообщение.")
 
 
 # ---------- расписание ----------
