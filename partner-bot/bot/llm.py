@@ -9,11 +9,14 @@ from __future__ import annotations
 
 import json
 import logging
+import os
 from datetime import date
 
 log = logging.getLogger(__name__)
 
-MODEL = "claude-opus-5-5"
+# Haiku: дешёвая и быстрая, для разбора коротких отчётов её хватает.
+# Можно сменить без правки кода: CLAUDE_MODEL=claude-sonnet-5-5 в .env
+MODEL = os.environ.get("CLAUDE_MODEL", "claude-haiku-5-5")
 
 _nullable_str = {"anyOf": [{"type": "string"}, {"type": "null"}]}
 
@@ -101,12 +104,10 @@ class ReportParser:
 
     def parse(self, text: str, kind: str, partner: str, today: date,
               leads: list[dict], statuses: list[str]) -> dict:
-        response = self.client.beta.messages.create(
+        response = self.client.messages.create(
             model=MODEL,
             max_tokens=16000,
-            betas=["server-side-fallback-2026-07-01"],
-            fallbacks="default",
-            output_config={"effort": "low",
+            output_config={"effort": "medium",
                            "format": {"type": "json_schema", "schema": SCHEMA}},
             system=SYSTEM,
             messages=[{"role": "user",
