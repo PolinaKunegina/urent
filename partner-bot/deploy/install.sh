@@ -22,6 +22,11 @@ say() { printf '\n\033[1;32m▶ %s\033[0m\n' "$1"; }
 say "Ставлю Docker и git"
 command -v git >/dev/null || { apt-get update -qq && apt-get install -y -qq git; }
 command -v docker >/dev/null || curl -fsSL https://get.docker.com | sh
+if ! docker compose version >/dev/null 2>&1; then
+  # Docker из репозитория Ubuntu ставится без compose — доставляем модуль
+  apt-get update -qq
+  apt-get install -y -qq docker-compose-plugin || apt-get install -y -qq docker-compose-v2
+fi
 
 say "Забираю код (ветка $BRANCH)"
 if [ -d "$APP/.git" ]; then
