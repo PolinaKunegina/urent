@@ -2,35 +2,34 @@
 from __future__ import annotations
 
 import os
+import re
 from dataclasses import dataclass, field
 from datetime import time
 from zoneinfo import ZoneInfo
 
 
 @dataclass
-class SheetSource:
-    label: str      # подпись в отчёте, например фамилия партнёра
-    file_id: str    # id файла на Google Drive (xlsx или Google Таблица)
-
-
-@dataclass
 class Config:
     bot_token: str = ""
-    service_account_file: str = ""
-    sheets: list[SheetSource] = field(default_factory=list)
+    service_account_file: str = "secrets/service-account.json"
+    sheet_id: str = ""                       # общая таблица воронки на Google Drive
     sheet_tab: str = "Воронка лидов"
-    report_chat_ids: list[int] = field(default_factory=list)
-    admin_ids: list[int] = field(default_factory=list)
-    partners_chat_id: int | None = None
-    report_time: time = time(9, 0)
-    reminder_time: time | None = time(18, 0)
+    managers: list[str] = field(default_factory=list)   # @username или числовые id
+    partners_file: str = "data/partners.json"
+    partners_chat_id: int | None = None      # можно не задавать: /bindchat в чате партнёров
+    report_time: time = time(8, 0)
+    reminder_time: time | None = time(18, 30)
+    weekly_day: int | None = 0               # 0 = понедельник, None = без недельной сводки
     tz: ZoneInfo = ZoneInfo("Europe/Moscow")
     exclude_status_regex: str = r"отказ"
     db_path: str = "data/bot.db"
+    write_back: bool = True                  # подсветка и лист с часами (нужна Google Таблица)
+    hours_tab: str = "Часы из чата"
+    helper_header: str = "След. касание (бот)"
 
 
-def _ids(raw: str) -> list[int]:
-    return [int(x) for x in raw.replace(";", ",").split(",") if x.strip()]
+def parse_managers(raw: str) -> list[str]:
+    return [x.strip().lstrip("@").lower() for x in re.split(r"[,;\s]+", raw) if x.strip()]
 
 
 def _time(raw: str) -> time | None:
@@ -41,35 +40,28 @@ def _time(raw: str) -> time | None:
     return time(int(h), int(m))
 
 
-def parse_sheets(raw: str) -> list[SheetSource]:
-    """SHEETS=Петрова=1abc...;Иванова=1def...  (подпись можно не указывать)."""
-    result = []
-    for i, chunk in enumerate(x.strip() for x in raw.split(";")):
-        if not chunk:
-            continue
-        if "=" in chunk:
-            label, file_id = (p.strip() for p in chunk.split("=", 1))
-        else:
-            label, file_id = f"Таблица {i + 1}", chunk
-        result.append(SheetSource(label=label, file_id=file_id))
-    return result
+def _bool(raw: str) -> bool:
+    return raw.strip().lower() not in {"0", "off", "no", "false", "нет", ""}
 
 
 def load_config() -> Config:
     env = os.environ.get
-    tz = ZoneInfo(env("TZ_NAME", "Europe/Moscow"))
-    partners = env("PARTNERS_CHAT_ID", "").strip()
+    partners_chat = env("PARTNERS_CHAT_ID", "").strip()
+    weekly = env("WEEKLY_DAY", "0").strip()
     return Config(
         bot_token=env("TELEGRAM_BOT_TOKEN", ""),
         service_account_file=env("GOOGLE_SERVICE_ACCOUNT_FILE", "secrets/service-account.json"),
-        sheets=parse_sheets(env("SHEETS", "")),
+        sheet_id=env("SHEET_ID", "").strip(),
         sheet_tab=env("SHEET_TAB", "Воронка лидов"),
-        report_chat_ids=_ids(env("REPORT_CHAT_IDS", "")),
-        admin_ids=_ids(env("ADMIN_IDS", "")),
-        partners_chat_id=int(partners) if partners else None,
-        report_time=_time(env("REPORT_TIME", "09:00")) or time(9, 0),
-        reminder_time=_time(env("REMINDER_TIME", "18:00")),
-        tz=tz,
+        managers=parse_managers(env("MANAGERS", "")),
+        partners_file=env("PARTNERS_FILE", "data/partners.json"),
+        partners_chat_id=int(partners_chat) if partners_chat else None,
+        report_time=_time(env("REPORT_TIME", "08:00")) or time(8, 0),
+        reminder_time=_time(env("REMINDER_TIME", "18:30")),
+        weekly_day=None if weekly.lower() in {"off", "-", ""} else int(weekly),
+        tz=ZoneInfo(env("TZ_NAME", "Europe/Moscow")),
         exclude_status_regex=env("EXCLUDE_STATUS_REGEX", r"отказ"),
         db_path=env("DB_PATH", "data/bot.db"),
+        write_back=_bool(env("WRITE_BACK", "on")),
+        hours_tab=env("HOURS_TAB", "Часы из чата"),
     )

@@ -16,7 +16,8 @@ from openpyxl import load_workbook
 DRIVE_API = "https://www.googleapis.com/drive/v3/files"
 GSHEET_MIME = "application/vnd.google-apps.spreadsheet"
 XLSX_MIME = "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
-SCOPES = ["https://www.googleapis.com/auth/drive.readonly"]
+SCOPES = ["https://www.googleapis.com/auth/drive.readonly",
+          "https://www.googleapis.com/auth/spreadsheets"]
 
 
 @dataclass
@@ -55,14 +56,19 @@ class Lead:
 
 # ---------- загрузка ----------
 
-def fetch_xlsx(file_id: str, service_account_file: str) -> bytes:
+def google_session(service_account_file: str):
     from google.auth.transport.requests import AuthorizedSession
     from google.oauth2 import service_account
 
     creds = service_account.Credentials.from_service_account_file(
         service_account_file, scopes=SCOPES
     )
-    s = AuthorizedSession(creds)
+    return AuthorizedSession(creds)
+
+
+def fetch_xlsx(file_id: str, service_account_file: str, session=None) -> tuple[bytes, str]:
+    """(содержимое в xlsx, mimeType исходного файла)."""
+    s = session or google_session(service_account_file)
     meta = s.get(f"{DRIVE_API}/{file_id}", params={
         "fields": "mimeType,name", "supportsAllDrives": "true"}, timeout=30)
     meta.raise_for_status()
@@ -73,7 +79,7 @@ def fetch_xlsx(file_id: str, service_account_file: str) -> bytes:
         r = s.get(f"{DRIVE_API}/{file_id}", params={
             "alt": "media", "supportsAllDrives": "true"}, timeout=60)
     r.raise_for_status()
-    return r.content
+    return r.content, mime
 
 
 # ---------- разбор ----------
@@ -119,7 +125,17 @@ def _find_header(ws, max_scan: int = 15):
     raise ValueError("Не нашла строку заголовков с колонкой «Имя лида»")
 
 
-def parse_funnel(xlsx: bytes, tab: str = "Воронка лидов") -> list[Lead]:
+@dataclass
+class Funnel:
+    leads: list[Lead]
+    tab: str            # фактическое имя листа
+    header_row: int     # номер строки с заголовками (1-based)
+    headers: list[str]  # заголовки в нижнем регистре
+    name_col: int       # индекс колонки «Имя лида» (0-based)
+    last_row: int       # последняя строка листа
+
+
+def parse_funnel(xlsx: bytes, tab: str = "Воронка лидов") -> Funnel:
     wb = load_workbook(io.BytesIO(xlsx), data_only=True, read_only=True)
     if tab in wb.sheetnames:
         ws = wb[tab]
@@ -180,5 +196,42 @@ def parse_funnel(xlsx: bytes, tab: str = "Воронка лидов") -> list[Le
             description=_clean(cell(row, "description")),
             touches=touches,
         ))
+    last_row = ws.max_row or header_row
+    title = ws.title
     wb.close()
-    return leads
+    return Funnel(leads=leads, tab=title, header_row=header_row, headers=headers,
+                  name_col=col["name"], last_row=last_row)
+
+
+# ---------- лист «Партнёры» ----------
+
+PARTNERS_TAB = "Партнёры"
+PARTNERS_HEADER = ["Партнёр", "Telegram", "Как ещё пишут в колонке Источник (через запятую)"]
+
+
+def parse_partners(xlsx: bytes, tab: str = PARTNERS_TAB) -> list[dict] | None:
+    """Справочник из листа «Партнёры». None, если такого листа нет."""
+    wb = load_workbook(io.BytesIO(xlsx), data_only=True, read_only=True)
+    try:
+        if tab not in wb.sheetnames:
+            return None
+        rows = list(wb[tab].iter_rows(values_only=True))
+    finally:
+        wb.close()
+    if not rows:
+        return []
+    head = [_norm(c) for c in rows[0]]
+    def idx(*names):
+        return next((i for i, h in enumerate(head) if any(h.startswith(n) for n in names)), None)
+    i_name, i_tg, i_alias = idx("партн", "имя"), idx("telegram", "телеграм", "ник"), idx("как ещё", "вариант", "алиас")
+    if i_name is None:
+        return []
+    out = []
+    for r in rows[1:]:
+        get = lambda i: _clean(r[i]) if i is not None and i < len(r) else ""
+        name = get(i_name)
+        if not name:
+            continue
+        aliases = [a.strip() for a in re.split(r"[,;\n]", get(i_alias)) if a.strip()]
+        out.append({"name": name, "telegram": get(i_tg), "aliases": aliases})
+    return out

@@ -101,7 +101,11 @@ def parse_message(text: str) -> ParsedReport | None:
         if current is None:
             continue
         h = hours_in(line)
-        note = TAG_RE.sub("", line).strip(" -—:")
+        note = TAG_RE.sub("", line)
+        for rx in (HOURS_RE, MINUTES_RE, HHMM_RE):
+            note = rx.sub("", note)
+        note = re.sub(r"\s*([—–-])\s*[,;]\s*", r" \1 ", note)
+        note = re.sub(r"\s{2,}", " ", re.sub(r"^[\d.)\s]*", "", note)).strip(" -—–:,.")
         e = entries.setdefault(current, Entry(current, 0.0, ""))
         e.hours = round(e.hours + h, 2)
         if note and found:
@@ -129,6 +133,16 @@ CREATE INDEX IF NOT EXISTS idx_entries_msg ON entries(chat_id, message_id);
 CREATE TABLE IF NOT EXISTS partners (
     user_id INTEGER PRIMARY KEY,
     partner TEXT NOT NULL
+);
+CREATE TABLE IF NOT EXISTS users (
+    user_id INTEGER PRIMARY KEY,
+    username TEXT,
+    full_name TEXT,
+    private_ok INTEGER DEFAULT 0   -- написал боту /start, значит можно писать в личку
+);
+CREATE TABLE IF NOT EXISTS settings (
+    key TEXT PRIMARY KEY,
+    value TEXT
 );
 """
 
@@ -173,6 +187,37 @@ class Store:
     def partner_for(self, user_id: int) -> str | None:
         row = self.db.execute("SELECT partner FROM partners WHERE user_id=?", (user_id,)).fetchone()
         return row[0] if row else None
+
+    def upsert_user(self, user_id: int, username: str | None, full_name: str,
+                    private_ok: bool = False) -> None:
+        with self.db:
+            self.db.execute(
+                "INSERT INTO users(user_id, username, full_name, private_ok) VALUES (?,?,?,?)"
+                " ON CONFLICT(user_id) DO UPDATE SET username=excluded.username,"
+                " full_name=excluded.full_name, private_ok=MAX(users.private_ok, excluded.private_ok)",
+                (user_id, (username or "").lower(), full_name, int(private_ok)))
+
+    def user_by_username(self, username: str) -> tuple[int, bool] | None:
+        """(user_id, можно ли писать в личку)."""
+        row = self.db.execute("SELECT user_id, private_ok FROM users WHERE username=?",
+                              (username.lstrip("@").lower(),)).fetchone()
+        return (row[0], bool(row[1])) if row else None
+
+    def get_setting(self, key: str) -> str | None:
+        row = self.db.execute("SELECT value FROM settings WHERE key=?", (key,)).fetchone()
+        return row[0] if row else None
+
+    def set_setting(self, key: str, value: str) -> None:
+        with self.db:
+            self.db.execute("INSERT INTO settings(key, value) VALUES (?, ?)"
+                            " ON CONFLICT(key) DO UPDATE SET value=excluded.value", (key, value))
+
+    def all_entries(self) -> list[tuple]:
+        """Для выгрузки в Google Таблицу: (день, партнёр, процесс, часы, заметка, username)."""
+        return self.db.execute(
+            "SELECT e.day, e.partner, e.process, e.hours, e.note, COALESCE(u.username, '')"
+            " FROM entries e LEFT JOIN users u ON u.user_id = e.user_id"
+            " ORDER BY e.day DESC, e.partner").fetchall()
 
     def partners_reported(self, day: date) -> set[str]:
         rows = self.db.execute("SELECT DISTINCT partner FROM entries WHERE day=?",
