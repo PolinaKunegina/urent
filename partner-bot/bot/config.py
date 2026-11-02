@@ -29,7 +29,15 @@ class Config:
 
 
 def parse_managers(raw: str) -> list[str]:
-    return [x.strip().lstrip("@").lower() for x in re.split(r"[,;\s]+", raw) if x.strip()]
+    """@ник, ник, числовой id или ссылка t.me/ник — всё приводим к нику в нижнем регистре."""
+    out = []
+    for x in re.split(r"[,;\s]+", raw):
+        x = x.strip()
+        if not x:
+            continue
+        m = re.search(r"(?:t\.me|telegram\.me)/@?([A-Za-z0-9_]+)", x)
+        out.append((m.group(1) if m else x).lstrip("@").lower())
+    return out
 
 
 def _time(raw: str) -> time | None:

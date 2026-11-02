@@ -248,6 +248,7 @@ def test_write_back_highlight():
 
 def test_parse_managers():
     assert parse_managers("@Natasha, kir ;12345") == ["natasha", "kir", "12345"]
+    assert parse_managers("@Anton, https://t.me/Polina_K") == ["anton", "polina_k"]
 
 
 def test_split_message():
