@@ -273,8 +273,7 @@ if __name__ == "__main__":
 
 
 def rebuild_partner_tabs(session, spreadsheet_id: str, today: date, only: list[str] | None = None) -> list[str]:
-    """Пересобирает вкладки партнёров по новому макету, сохраняя клиентов и часы.
-    Будущие даты из истории касаний становятся «Следующим шагом»."""
+    """Пересобирает вкладки партнёров по новому макету, сохраняя клиентов, историю и часы."""
     from .sheets import fetch_xlsx
     from .workbook import parse_partner_tabs
     import os
@@ -287,16 +286,12 @@ def rebuild_partner_tabs(session, spreadsheet_id: str, today: date, only: list[s
         if only and t.name not in only:
             continue
         clients = []
-        for l in t.clients:
-            future = sorted((x for x in l.touches if x.when and x.when >= today), key=lambda x: x.when)
-            nxt = l.next_date or (future[0].when if future else None)
-            what = l.next_what or (future[0].fmt if future and not l.next_date else "")
-            history = [x for x in l.touches if not (x.when and x.when >= today)]
+        for l in t.clients:     # история касаний переносится целиком, как есть
             clients.append({
                 "name": l.name, "source": l.source, "status": l.status, "description": l.description,
-                "next_date": nxt.isoformat() if nxt else "", "next_what": what,
-                "touches": [{"n": i + 1, "date": x.when.isoformat() if x.when else x.raw, "fmt": x.fmt}
-                            for i, x in enumerate(history[:5])]})
+                "next_date": l.next_date.isoformat() if l.next_date else "", "next_what": l.next_what,
+                "touches": [{"n": x.n, "date": x.when.isoformat() if x.when else x.raw, "fmt": x.fmt}
+                            for x in l.touches]})
         start = min(t.days) if t.days else today
         tmp = f"_новая {t.name}"
         new_id = create_partner_tab(sh, t.name, start, clients, t.days, tab_title=tmp)
