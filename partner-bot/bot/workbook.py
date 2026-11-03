@@ -232,24 +232,44 @@ def fx(formula: str, sep: str) -> str:
     return "".join(out)
 
 
-def nav_links(nav: dict, sep: str = ";") -> tuple[str, str]:
-    """Ссылки «← Оглавление» и «📖 Инструкция» (nav = {"toc": gid, "guide": gid})."""
-    toc = fx(f'=HYPERLINK("#gid={nav["toc"]}","← Оглавление")', sep) if nav.get("toc") is not None else ""
-    guide = fx(f'=HYPERLINK("#gid={nav["guide"]}","📖 Инструкция")', sep) if nav.get("guide") is not None else ""
-    return toc, guide
+def link_cell(sheet_id: int, row: int, col: int, parts: list[tuple[str, str | None]],
+              size: int = 11, bold: bool = False) -> dict:
+    """Ячейка с обычными (не формульными) ссылками — так переход внутри таблицы работает
+    надёжно, как ссылка, вставленная через Ctrl+K. parts = [(текст, uri или None), ...]."""
+    text, runs, pos = "", [], 0
+    for chunk, uri in parts:
+        fmt = {"fontSize": size, "bold": bold}
+        if uri:
+            fmt.update({"link": {"uri": uri}, "foregroundColor": LINK_BLUE, "underline": True})
+        runs.append({"startIndex": pos, "format": fmt})
+        text += chunk
+        pos += len(chunk)
+    return {"updateCells": {
+        "rows": [{"values": [{"userEnteredValue": {"stringValue": text}, "textFormatRuns": runs}]}],
+        "fields": "userEnteredValue,textFormatRuns",
+        "start": {"sheetId": sheet_id, "rowIndex": row, "columnIndex": col}}}
 
 
-def link_style(sheet_id: int, row: int, cols: list[int], size: int = 11) -> list[dict]:
-    return [{"repeatCell": {"range": {"sheetId": sheet_id, "startRowIndex": row, "endRowIndex": row + 1,
-                                      "startColumnIndex": c, "endColumnIndex": c + 1},
-                            "cell": {"userEnteredFormat": {"textFormat": {
-                                "foregroundColor": LINK_BLUE, "underline": True, "fontSize": size}}},
-                            "fields": "userEnteredFormat.textFormat"}} for c in cols]
+def partner_links(gid: int, plan_col: int, toc_gid: int | None, guide_gid: int | None) -> list[dict]:
+    """Переходы на вкладке партнёра: к часам и обратно, к оглавлению и инструкции."""
+    reqs = [
+        link_cell(gid, 0, COL_NEXT_DATE, [("→ к моим часам", f"#gid={gid}&range={col_letter(plan_col)}{HEADER_ROW}")],
+                  size=12, bold=True),
+        link_cell(gid, 0, plan_col + 3, [("← к клиентам", f"#gid={gid}&range=A{HEADER_ROW}")], size=12, bold=True),
+    ]
+    nav = []
+    if toc_gid is not None:
+        nav.append(("← Оглавление", f"#gid={toc_gid}"))
+    if guide_gid is not None:
+        nav += [("   ", None), ("📖 Инструкция", f"#gid={guide_gid}")]
+    if nav:
+        reqs.append(link_cell(gid, 2, COL_NAME, nav))   # колонка B закреплена — ссылки всегда на виду
+    return reqs
 
 
 def partner_tab_values(name: str, start: date, end: date, clients: list[dict] | None = None,
                        sep: str = ";", gid: int | None = None,
-                       days: dict | None = None, nav: dict | None = None) -> list[list]:
+                       days: dict | None = None) -> list[list]:
     """Значения вкладки целиком (USER_ENTERED): заголовки, ссылки-переходы, даты, клиенты, часы."""
     width = PLAN_COL0 + len(PLAN_HEADERS)
     grid = [["" for _ in range(width)] for _ in range(HEADER_ROW + CLIENT_ROWS)]
@@ -259,11 +279,6 @@ def partner_tab_values(name: str, start: date, end: date, clients: list[dict] | 
     grid[0][PLAN_COL0] = "Мои часы по дням"
     grid[1][PLAN_COL0] = ("Вечером: в зелёной строке (сегодня) — факт рядом с планом, "
                           "в голубой (завтра) — план. Ничего не стирайте: план и факт стоят рядом.")
-    if gid is not None:
-        plan_cell = f"{col_letter(PLAN_COL0)}{HEADER_ROW}"
-        grid[0][COL_NEXT_DATE] = fx(f'=HYPERLINK("#gid={gid}&range={plan_cell}","→ к моим часам")', sep)
-        grid[0][PLAN_COL0 + 3] = fx(f'=HYPERLINK("#gid={gid}&range=A{HEADER_ROW}","← к клиентам")', sep)
-    grid[2][0], grid[2][1] = nav_links(nav or {}, sep)
     for i, h in enumerate(CRM_HEADERS):
         grid[HEADER_ROW - 1][i] = h
     for i, h in enumerate(PLAN_HEADERS):
@@ -350,10 +365,6 @@ def partner_tab_format_requests(sheet_id: int, sep: str = ";", service_email: st
             "fields": "gridProperties.frozenRowCount,gridProperties.frozenColumnCount"}},
         {"repeatCell": {"range": rng(0, 1, 0, PLAN_COL0 + plan_w), "cell": {"userEnteredFormat": {
             "textFormat": {"bold": True, "fontSize": 13}}}, "fields": "userEnteredFormat.textFormat"}},
-        *[{"repeatCell": {"range": rng(0, 1, c, c + 1), "cell": {"userEnteredFormat": {"textFormat": {
-            "foregroundColor": LINK_BLUE, "underline": True, "bold": True, "fontSize": 12}}},
-            "fields": "userEnteredFormat.textFormat"}} for c in (COL_NEXT_DATE, PLAN_COL0 + 3)],
-        *link_style(sheet_id, 2, [0, 1]),
         fill(rng(h0, HEADER_ROW, 0, crm_w), HEAD_BG, bold=True, wrap=True),
         fill(rng(h0, HEADER_ROW, COL_NEXT_DATE, COL_NEXT_WHAT + 1), NEXT_BG, bold=True, wrap=True),
         fill(rng(h0, HEADER_ROW, PLAN_COL0, PLAN_COL0 + plan_w), PLAN_BG, bold=True, wrap=True),

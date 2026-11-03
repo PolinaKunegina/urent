@@ -15,7 +15,7 @@ from urllib.parse import quote
 
 from .guide import GUIDE, GUIDE_TAB, guide_requests, guide_values
 from .partners import Directory
-from .workbook import (PLAN_COL0, PLAN_HEADERS, col_letter, fx, link_style, nav_links,
+from .workbook import (PLAN_COL0, PLAN_HEADERS, col_letter, link_cell, partner_links,
                        partner_tab_format_requests, partner_tab_values, sep_for_locale)
 
 log = logging.getLogger(__name__)
@@ -112,8 +112,9 @@ def create_partner_tab(sh: Sheet, name: str, start: date, clients: list[dict] | 
     tabs = sh.tabs()
     nav = {"toc": tabs.get(TOC), "guide": tabs.get(GUIDE_TAB)}
     sid = sh.add_tab(title, cols=PLAN_COL0 + len(PLAN_HEADERS) + 1)
-    sh.put(f"'{title}'!A1", partner_tab_values(name, start, SPRINT_END, clients, sh.sep(), sid, days, nav))
-    sh.batch(partner_tab_format_requests(sid, sh.sep(), service_email()))
+    sh.put(f"'{title}'!A1", partner_tab_values(name, start, SPRINT_END, clients, sh.sep(), sid, days))
+    sh.batch(partner_tab_format_requests(sid, sh.sep(), service_email())
+             + partner_links(sid, PLAN_COL0, nav["toc"], nav["guide"]))
     log.info("Создана вкладка партнёра «%s» (%d клиентов)", name, len(clients or []))
     return sid
 
@@ -137,20 +138,22 @@ def write_toc(sh: Sheet, directory: Directory, tabs: dict[str, int], sandbox: bo
     rows = [
         [title],
         ["Найдите себя в списке и нажмите «Открыть →» — это ваша личная CRM."],
-        [f"Впервые здесь? Начните с листа «{GUIDE_TAB}» — 5 минут чтения.",
-         nav_links({"guide": tabs.get(GUIDE_TAB)}, sh.sep())[1]],
+        [f"Впервые здесь? Начните с листа «{GUIDE_TAB}» — 5 минут чтения."],
         ["Каждый вечер до 19:00: у каждого клиента следующий шаг, факт за сегодня, план на завтра."],
         [f"Общая статистика — на листе «{SUMMARY}»."],
         ["Партнёр", "Вкладка", "Telegram"],
     ]
     for p in directory.partners:
         gid = tabs.get(p.name)
-        link = (fx(f'=HYPERLINK("#gid={gid}","Открыть →")', sh.sep()) if gid is not None
-                else "вкладка появится в течение часа")
+        link = "Открыть →" if gid is not None else "вкладка появится в течение часа"
         rows.append([p.name, link, "@" + p.telegram.strip().lstrip("@") if p.username else ""])
     sh.clear(f"'{TOC}'!A1:C300")
     sh.put(f"'{TOC}'!A1", rows)
-    sh.batch(link_style(tabs[TOC], 2, [1]))
+    links = [link_cell(tabs[TOC], 6 + i, 1, [("Открыть →", f"#gid={tabs[p.name]}")])
+             for i, p in enumerate(directory.partners) if tabs.get(p.name) is not None]
+    if tabs.get(GUIDE_TAB) is not None:
+        links.append(link_cell(tabs[TOC], 2, 1, [("📖 Открыть инструкцию", f"#gid={tabs[GUIDE_TAB]}")]))
+    sh.batch(links)
 
 
 def ensure_structure(session, spreadsheet_id: str, directory: Directory, today: date,
@@ -171,8 +174,7 @@ def ensure_structure(session, spreadsheet_id: str, directory: Directory, today: 
         sh.put(f"'{GUIDE_TAB}'!A1", guide_values(sandbox), raw=True)
         sh.batch(guide_requests(gid))
         tabs[GUIDE_TAB] = gid
-        sh.put(f"'{GUIDE_TAB}'!B1", [[nav_links({"toc": tabs[TOC]}, sh.sep())[0]]])
-        sh.batch(link_style(gid, 0, [1]))
+        sh.batch([link_cell(gid, 0, 1, [("← Оглавление", f"#gid={tabs[TOC]}")])])
     created = []
     for p in directory.partners:
         if p.name in tabs:
@@ -213,28 +215,24 @@ def write_summary(session, spreadsheet_id: str, rows: list[list], updated: str) 
     sh.put(f"'{SUMMARY}'!A1", [["Сводка по партнёрам (обновляет бот)", f"обновлено {updated}"], [],
                                 SUMMARY_HEADER, *rows], raw=True)
     tabs = sh.tabs()
-    sh.put(f"'{SUMMARY}'!C1", [list(nav_links({"toc": tabs.get(TOC), "guide": tabs.get(GUIDE_TAB)}, sh.sep()))])
-    sh.batch(link_style(tabs[SUMMARY], 0, [2, 3]))
+    nav = [(t, f"#gid={tabs[k]}") for t, k in (("← Оглавление", TOC), ("📖 Инструкция", GUIDE_TAB)) if k in tabs]
+    sh.batch([link_cell(tabs[SUMMARY], 0, 2 + i, [x]) for i, x in enumerate(nav)])
 
 
-def add_nav_links(sh: Sheet, partner_names: list[str]) -> int:
-    """Ссылки «← Оглавление» / «📖 Инструкция» на уже существующих листах."""
+def add_nav_links(sh: Sheet, partner_tabs: list) -> int:
+    """Переставляет переходы на существующих вкладках (partner_tabs — PartnerTab с plan_col)."""
     tabs = sh.tabs()
-    toc, guide = nav_links({"toc": tabs.get(TOC), "guide": tabs.get(GUIDE_TAB)}, sh.sep())
-    data, fmt = [], []
-    for name in partner_names:
-        if name in tabs:
-            data.append({"range": f"'{name}'!A3:B3", "values": [[toc, guide]]})
-            fmt += link_style(tabs[name], 2, [0, 1])
-    if GUIDE_TAB in tabs:
-        data.append({"range": f"'{GUIDE_TAB}'!B1", "values": [[toc]]})
-        fmt += link_style(tabs[GUIDE_TAB], 0, [1])
-    if data:
-        r = sh.s.post(f"{API}/{sh.id}/values:batchUpdate",
-                      json={"valueInputOption": "USER_ENTERED", "data": data}, timeout=60)
-        r.raise_for_status()
-        sh.batch(fmt)
-    return len(data)
+    reqs, clear = [], []
+    for t in partner_tabs:
+        if t.name in tabs and t.plan_col is not None:
+            reqs += partner_links(tabs[t.name], t.plan_col, tabs.get(TOC), tabs.get(GUIDE_TAB))
+            clear.append(f"'{t.name}'!A3")
+    if GUIDE_TAB in tabs and TOC in tabs:
+        reqs.append(link_cell(tabs[GUIDE_TAB], 0, 1, [("← Оглавление", f"#gid={tabs[TOC]}")]))
+    for rng in clear:
+        sh.clear(rng)
+    sh.batch(reqs)
+    return len(reqs)
 
 
 def main() -> None:
@@ -330,7 +328,7 @@ def expand_history(sh: Sheet, tab, gid: int, add: int = HISTORY_ADD) -> None:
     sh.batch(reqs)
     if tab.plan_col is not None:   # ссылка «→ к моим часам» должна вести на новый адрес
         new_plan = tab.plan_col + 2 * add
-        sh.put(f"'{tab.name}'!{col_letter(COL_NEXT_DATE)}1",
-               [[fx(f'=HYPERLINK("#gid={gid}&range={col_letter(new_plan)}{HEADER_ROW}","→ к моим часам")',
-                    sh.sep())]])
+        sh.batch([link_cell(gid, 0, COL_NEXT_DATE,
+                            [("→ к моим часам", f"#gid={gid}&range={col_letter(new_plan)}{HEADER_ROW}")],
+                            size=12, bold=True)])
     log.info("Вкладка «%s»: добавлено %d пар касаний", tab.name, add)

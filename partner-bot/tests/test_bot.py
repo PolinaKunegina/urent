@@ -155,8 +155,11 @@ def test_layout_and_formulas():
                                                   "Факт: что сделал(а)", "% плана"]
     assert grid[4][PLAN_COL0 + 12] == '=IF(OR(SUM(T5:V5)=0;COUNT(X5:Z5)=0);"";SUM(X5:Z5)/SUM(T5:V5))'
     assert grid[4][COL_NEXT_DATE] == "2026-11-06" and grid[4][COL_NEXT_WHAT] == "созвон с Антоном"
-    assert grid[0][COL_NEXT_DATE] == '=HYPERLINK("#gid=77&range=S4";"→ к моим часам")'
-    assert grid[0][PLAN_COL0 + 3] == '=HYPERLINK("#gid=77&range=A4";"← к клиентам")'
+    from bot.workbook import partner_links
+    links = json.dumps(partner_links(77, PLAN_COL0, 1, 2), ensure_ascii=False)
+    assert '"uri": "#gid=77&range=S4"' in links and '"uri": "#gid=77&range=A4"' in links
+    assert '"stringValue": "← Оглавление   📖 Инструкция"' in links and '"uri": "#gid=2"' in links
+    assert "HYPERLINK" not in json.dumps(grid, ensure_ascii=False)
     assert grid[4][PLAN_COL0] == "2026-11-03" and grid[62][PLAN_COL0] == "2026-12-31"
     reqs = json.dumps(partner_tab_format_requests(42, service_email="bot@x"), ensure_ascii=False)
     assert 'OR($D5=\\"\\";$D5<TODAY();$D5>TODAY()+7)' in reqs
@@ -207,7 +210,9 @@ def test_ensure_structure_creates_missing_tabs_and_toc():
     assert created == ["Орлов Пётр"]
     puts = {c[2]["range"]: c[2]["values"] for c in fake.calls if c[0] == "PUT"}
     toc = puts["'Оглавление'!A1"]
-    assert toc[6] == ["Петрова Анна", '=HYPERLINK("#gid=2";"Открыть →")', "@anna_p"]
+    assert toc[6] == ["Петрова Анна", "Открыть →", "@anna_p"]
+    posts = json.dumps([c[2] for c in fake.calls if c[0] == "POST"], ensure_ascii=False)
+    assert '"uri": "#gid=2"' in posts
     fresh = FakeSheets({"Лист1": 0})
     ensure_structure(fresh, "SB", Directory([]), TODAY, sandbox=True)
     assert "Партнёры" in fresh.tabs and "Оглавление" in fresh.tabs and "Инструкция" in fresh.tabs
