@@ -219,7 +219,8 @@ def parse_funnel(xlsx: bytes, tab: str = "Воронка лидов") -> Funnel:
 # ---------- лист «Партнёры» ----------
 
 PARTNERS_TAB = "Партнёры"
-PARTNERS_HEADER = ["Партнёр", "Telegram", "Как ещё пишут в колонке Источник (через запятую)", "Добавлен"]
+PARTNERS_HEADER = ["Партнёр", "Telegram", "Как ещё пишут в колонке Источник (через запятую)", "Добавлен",
+                   "Почта (Google) — доступ к своей вкладке"]
 
 
 def parse_partners(xlsx: bytes, tab: str = PARTNERS_TAB) -> list[dict] | None:
@@ -238,6 +239,7 @@ def parse_partners(xlsx: bytes, tab: str = PARTNERS_TAB) -> list[dict] | None:
         return next((i for i, h in enumerate(head) if any(h.startswith(n) for n in names)), None)
     i_name, i_tg, i_alias = idx("партн", "имя"), idx("telegram", "телеграм", "ник"), idx("как ещё", "вариант", "алиас")
     i_added = idx("добавлен")
+    i_email = idx("почта", "email", "e-mail")
     if i_name is None:
         return []
     out = []
@@ -248,5 +250,7 @@ def parse_partners(xlsx: bytes, tab: str = PARTNERS_TAB) -> list[dict] | None:
             continue
         aliases = [a.strip() for a in re.split(r"[,;\n]", get(i_alias)) if a.strip()]
         added = to_date(r[i_added]) if i_added is not None and i_added < len(r) else None
-        out.append({"name": name, "telegram": get(i_tg), "aliases": aliases, "added": added})
+        from .access import split_emails
+        out.append({"name": name, "telegram": get(i_tg), "aliases": aliases, "added": added,
+                    "emails": split_emails(get(i_email))})
     return out
