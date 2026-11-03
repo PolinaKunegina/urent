@@ -127,7 +127,7 @@ def compute_network(tabs: list[PartnerTab], today: date) -> list[PartnerStats]:
     return sorted(stats, key=lambda s: (s.sandbox, s.name.lower()))
 
 
-CAT_SHORT = {"partners": "партнёры", "c95": "95", "c240": "240", "c5000": "интенсив"}
+CAT_SHORT = {"leads": "новых контактов", "c95": "партнёры 95", "c240": "партнёры 240", "c5000": "интенсив"}
 
 
 def month_line(goals: dict, results: dict) -> str:

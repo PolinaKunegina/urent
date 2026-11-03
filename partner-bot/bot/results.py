@@ -62,6 +62,9 @@ def write_month(sheet, store: Store, book: str, tabs: list[PartnerTab], today: d
         store.archive_goals(book, last, [(t.name, k, t.goals.get(k, 0), t.results.get(k, 0))
                                          for t in tabs for k, _, _ in RESULT_CATS])
     counts = store.month_results(book, month)
+    from .workbook import new_leads_in_month
+    for t in tabs:
+        counts[(t.name, "leads")] = new_leads_in_month(t, today)
     data = []
     for t in tabs:
         if t.month_col is None:

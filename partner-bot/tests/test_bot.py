@@ -271,7 +271,7 @@ def test_month_results(tmp_path):
     from bot.results import track
     from bot.sheets import Lead
     from bot.workbook import PartnerTab, result_cats
-    assert result_cats("Стал партнёром") == {"partners"}
+    assert result_cats("Стал партнёром") == set()
     assert result_cats("Оплатил 95") == {"c95"} and result_cats("Оплатил 240") == {"c240"}
     assert result_cats("Оплатил интенсив 5000") == {"c5000"} and result_cats("Думает") == set()
     st = Store(str(tmp_path / "t.db"))
@@ -285,7 +285,7 @@ def test_month_results(tmp_path):
     assert track(st, "B", [tab], TODAY) == []                     # повторно не засчитывает
     assert st.month_results("B", TODAY.strftime("%Y-%m")) == {("Петрова Анна", "c240"): 1,
                                                               ("Петрова Анна", "c5000"): 1}
-    assert month_line({"partners": 3, "c240": 2}, {"c240": 1}) == "партнёры 0/3 · 240 1/2"
+    assert month_line({"leads": 3, "c240": 2}, {"c240": 1}) == "новых контактов 0/3 · партнёры 240 1/2"
 
 
 def test_month_block_parsed():
@@ -300,10 +300,13 @@ def test_month_block_parsed():
     buf = io.BytesIO()
     wb.save(buf)
     tab = next(t for t in parse_partner_tabs(buf.getvalue()) if t.name == "Петрова Анна")
-    assert tab.goals == {"partners": 3, "c95": 5, "c240": 2, "c5000": 4}
-    assert tab.results == {"partners": 1, "c95": 2, "c240": 0, "c5000": 1}
+    assert tab.goals == {"leads": 3, "c95": 5, "c240": 2, "c5000": 4}
+    assert tab.results == {"leads": 1, "c95": 2, "c240": 0, "c5000": 1}
     s = next(x for x in compute_network([tab], TODAY))
-    assert "🎯 Месяц (факт/цель): партнёры 1/3 · 95 2/5 · 240 0/2 · интенсив 1/4" in render_partner_status(s, TODAY)
+    assert ("🎯 Месяц (факт/цель): новых контактов 1/3 · партнёры 95 2/5 · партнёры 240 0/2 · интенсив 1/4"
+            in render_partner_status(s, TODAY))
+    from bot.workbook import new_leads_in_month
+    assert new_leads_in_month(tab, TODAY) == 5     # клиенты Анны с первым касанием в ноябре
 
 
 
