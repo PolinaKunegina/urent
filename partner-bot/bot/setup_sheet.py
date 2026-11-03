@@ -15,8 +15,8 @@ from urllib.parse import quote
 
 from .guide import GUIDE, GUIDE_TAB, guide_requests, guide_values
 from .partners import Directory
-from .workbook import (PLAN_COL0, PLAN_HEADERS, col_letter, fx, partner_tab_format_requests,
-                       partner_tab_values, sep_for_locale)
+from .workbook import (PLAN_COL0, PLAN_HEADERS, col_letter, fx, link_style, nav_links,
+                       partner_tab_format_requests, partner_tab_values, sep_for_locale)
 
 log = logging.getLogger(__name__)
 API = "https://sheets.googleapis.com/v4/spreadsheets"
@@ -109,14 +109,16 @@ class Sheet:
 def create_partner_tab(sh: Sheet, name: str, start: date, clients: list[dict] | None = None,
                        days: dict | None = None, tab_title: str | None = None) -> int:
     title = tab_title or name
+    tabs = sh.tabs()
+    nav = {"toc": tabs.get(TOC), "guide": tabs.get(GUIDE_TAB)}
     sid = sh.add_tab(title, cols=PLAN_COL0 + len(PLAN_HEADERS) + 1)
-    sh.put(f"'{title}'!A1", partner_tab_values(name, start, SPRINT_END, clients, sh.sep(), sid, days))
+    sh.put(f"'{title}'!A1", partner_tab_values(name, start, SPRINT_END, clients, sh.sep(), sid, days, nav))
     sh.batch(partner_tab_format_requests(sid, sh.sep(), service_email()))
     log.info("Создана вкладка партнёра «%s» (%d клиентов)", name, len(clients or []))
     return sid
 
 
-def write_toc(sh: Sheet, directory: Directory, tabs: dict[str, int], sandbox: bool = False) -> None:
+def ensure_toc_tab(sh: Sheet, tabs: dict[str, int]) -> None:
     if TOC not in tabs:
         tabs[TOC] = sh.add_tab(TOC, index=0, rows=200, cols=6)
         sh.batch([{"updateSheetProperties": {"properties": {"sheetId": tabs[TOC], "gridProperties": {
@@ -127,11 +129,16 @@ def write_toc(sh: Sheet, directory: Directory, tabs: dict[str, int], sandbox: bo
             {"repeatCell": {"range": {"sheetId": tabs[TOC], "startRowIndex": 0, "endRowIndex": 1},
                             "cell": {"userEnteredFormat": {"textFormat": {"bold": True, "fontSize": 14}}},
                             "fields": "userEnteredFormat.textFormat"}}])
+
+
+def write_toc(sh: Sheet, directory: Directory, tabs: dict[str, int], sandbox: bool = False) -> None:
+    ensure_toc_tab(sh, tabs)
     title = "Песочница новых партнёров" if sandbox else "Партнёрская сеть — CRM и планирование"
     rows = [
         [title],
         ["Найдите себя в списке и нажмите «Открыть →» — это ваша личная CRM."],
-        [f"Впервые здесь? Начните с листа «{GUIDE_TAB}» — 5 минут чтения."],
+        [f"Впервые здесь? Начните с листа «{GUIDE_TAB}» — 5 минут чтения.",
+         nav_links({"guide": tabs.get(GUIDE_TAB)}, sh.sep())[1]],
         ["Каждый вечер до 19:00: у каждого клиента следующий шаг, факт за сегодня, план на завтра."],
         [f"Общая статистика — на листе «{SUMMARY}»."],
         ["Партнёр", "Вкладка", "Telegram"],
@@ -143,6 +150,7 @@ def write_toc(sh: Sheet, directory: Directory, tabs: dict[str, int], sandbox: bo
         rows.append([p.name, link, "@" + p.telegram.strip().lstrip("@") if p.username else ""])
     sh.clear(f"'{TOC}'!A1:C300")
     sh.put(f"'{TOC}'!A1", rows)
+    sh.batch(link_style(tabs[TOC], 2, [1]))
 
 
 def ensure_structure(session, spreadsheet_id: str, directory: Directory, today: date,
@@ -157,17 +165,20 @@ def ensure_structure(session, spreadsheet_id: str, directory: Directory, today: 
         from .sheets import PARTNERS_HEADER
         tabs[PARTNERS] = sh.add_tab(PARTNERS, rows=200, cols=4)
         sh.put(f"'{PARTNERS}'!A1", [PARTNERS_HEADER], raw=True)
+    ensure_toc_tab(sh, tabs)               # оглавление и инструкция — до вкладок партнёров,
+    if GUIDE_TAB not in tabs:              # чтобы в них сразу были ссылки на эти листы
+        gid = sh.add_tab(GUIDE_TAB, index=1, rows=len(GUIDE) + 5, cols=2)
+        sh.put(f"'{GUIDE_TAB}'!A1", guide_values(sandbox), raw=True)
+        sh.batch(guide_requests(gid))
+        tabs[GUIDE_TAB] = gid
+        sh.put(f"'{GUIDE_TAB}'!B1", [[nav_links({"toc": tabs[TOC]}, sh.sep())[0]]])
+        sh.batch(link_style(gid, 0, [1]))
     created = []
     for p in directory.partners:
         if p.name in tabs:
             continue
         tabs[p.name] = create_partner_tab(sh, p.name, today, (prefill or {}).get(p.name))
         created.append(p.name)
-    if GUIDE_TAB not in tabs:
-        gid = sh.add_tab(GUIDE_TAB, index=1, rows=len(GUIDE) + 5, cols=2)
-        sh.put(f"'{GUIDE_TAB}'!A1", guide_values(sandbox), raw=True)
-        sh.batch(guide_requests(gid))
-        tabs[GUIDE_TAB] = gid
     if created or force_toc or TOC not in tabs:
         write_toc(sh, directory, tabs, sandbox)
     return created
@@ -201,6 +212,29 @@ def write_summary(session, spreadsheet_id: str, rows: list[list], updated: str) 
     sh.clear(f"'{SUMMARY}'!A1:{col_letter(len(SUMMARY_HEADER))}400")
     sh.put(f"'{SUMMARY}'!A1", [["Сводка по партнёрам (обновляет бот)", f"обновлено {updated}"], [],
                                 SUMMARY_HEADER, *rows], raw=True)
+    tabs = sh.tabs()
+    sh.put(f"'{SUMMARY}'!C1", [list(nav_links({"toc": tabs.get(TOC), "guide": tabs.get(GUIDE_TAB)}, sh.sep()))])
+    sh.batch(link_style(tabs[SUMMARY], 0, [2, 3]))
+
+
+def add_nav_links(sh: Sheet, partner_names: list[str]) -> int:
+    """Ссылки «← Оглавление» / «📖 Инструкция» на уже существующих листах."""
+    tabs = sh.tabs()
+    toc, guide = nav_links({"toc": tabs.get(TOC), "guide": tabs.get(GUIDE_TAB)}, sh.sep())
+    data, fmt = [], []
+    for name in partner_names:
+        if name in tabs:
+            data.append({"range": f"'{name}'!A3:B3", "values": [[toc, guide]]})
+            fmt += link_style(tabs[name], 2, [0, 1])
+    if GUIDE_TAB in tabs:
+        data.append({"range": f"'{GUIDE_TAB}'!B1", "values": [[toc]]})
+        fmt += link_style(tabs[GUIDE_TAB], 0, [1])
+    if data:
+        r = sh.s.post(f"{API}/{sh.id}/values:batchUpdate",
+                      json={"valueInputOption": "USER_ENTERED", "data": data}, timeout=60)
+        r.raise_for_status()
+        sh.batch(fmt)
+    return len(data)
 
 
 def main() -> None:

@@ -40,12 +40,13 @@ DATE_COLS = [d for _, d, _ in TOUCH_COLS]
 PLAN_COL0 = len(CRM_HEADERS) + 1   # колонка S — начало блока часов (R — узкий разделитель)
 PLAN_HEADERS = [
     "Дата",
-    "Привлечение — план, ч", "Прогрев — план, ч", "Закрытие — план, ч",
+    "Привлечение — план, ч", "Прогрев — план, ч", "Закрытие — план, ч", "План: что буду делать",
     "Привлечение — факт, ч", "Прогрев — факт, ч", "Закрытие — факт, ч",
     "Привлечение — людей", "Прогрев — людей", "Закрытие — людей",
-    "Что делал(а) / комментарий",
+    "Факт: что сделал(а)", "% плана",
 ]
-P_PLAN, P_FACT, P_PEOPLE, P_COMMENT = 1, 4, 7, 10   # смещения от PLAN_COL0
+# смещения от PLAN_COL0
+P_PLAN, P_PLAN_NOTE, P_FACT, P_PEOPLE, P_FACT_NOTE, P_PCT = 1, 4, 5, 8, 11, 12
 PROCESSES = ["attract", "warmup", "close"]
 PROCESS_NAMES = {"attract": "привлечение", "warmup": "прогрев", "close": "закрытие"}
 
@@ -64,8 +65,9 @@ class DayPlan:
     day: date
     plan: dict[str, float]     # процесс -> часы (только заполненные)
     fact: dict[str, float]
-    comment: str = ""
+    fact_note: str = ""                                       # «Факт: что сделал(а)»
     people: dict[str, float] = field(default_factory=dict)   # сколько людей в работе (факт)
+    plan_note: str = ""                                       # «План: что буду делать»
 
     @property
     def has_plan(self) -> bool:
@@ -151,7 +153,8 @@ def _parse_rows(title: str, rows: list[tuple], sandbox: bool) -> PartnerTab:
     plan_cols = {p: find(f"{PROCESS_NAMES[p]} — план") for p in PROCESSES}
     fact_cols = {p: find(f"{PROCESS_NAMES[p]} — факт") for p in PROCESSES}
     people_cols = {p: find(f"{PROCESS_NAMES[p]} — людей") for p in PROCESSES}
-    c_comment = find("что делал")
+    c_plan_note = find("план: что")
+    c_fact_note = find("факт: что") if find("факт: что") is not None else find("что делал")
 
     def cell(row, i):
         return row[i] if i is not None and i < len(row) else None
@@ -178,7 +181,10 @@ def _parse_rows(title: str, rows: list[tuple], sandbox: bool) -> PartnerTab:
             plan = {p: v for p in PROCESSES if (v := _num(cell(row, plan_cols[p]))) is not None}
             fact = {p: v for p in PROCESSES if (v := _num(cell(row, fact_cols[p]))) is not None}
             people = {p: v for p in PROCESSES if (v := _num(cell(row, people_cols[p]))) is not None}
-            tab.days[d] = DayPlan(d, plan, fact, _clean(cell(row, c_comment)), people)
+            plan_note, fact_note = _clean(cell(row, c_plan_note)), _clean(cell(row, c_fact_note))
+            if c_plan_note is None and fact_note.lower().startswith("план"):   # старый общий комментарий
+                plan_note, fact_note = fact_note, ""
+            tab.days[d] = DayPlan(d, plan, fact, fact_note, people, plan_note)
     return tab
 
 
@@ -198,6 +204,7 @@ PLAN_BG = {"red": 0.89, "green": 0.94, "blue": 0.99}
 RED_BG = {"red": 0.957, "green": 0.8, "blue": 0.8}
 RED_TEXT = {"red": 0.6, "green": 0.0, "blue": 0.0}
 TODAY_BG = {"red": 0.85, "green": 0.93, "blue": 0.83}
+FACT_BG = {"red": 0.85, "green": 0.94, "blue": 0.83}
 PEOPLE_BG = {"red": 0.93, "green": 0.89, "blue": 0.98}
 LINK_BLUE = {"red": 0.07, "green": 0.33, "blue": 0.8}
 TOMORROW_BG = {"red": 0.85, "green": 0.92, "blue": 0.98}
@@ -225,9 +232,24 @@ def fx(formula: str, sep: str) -> str:
     return "".join(out)
 
 
+def nav_links(nav: dict, sep: str = ";") -> tuple[str, str]:
+    """Ссылки «← Оглавление» и «📖 Инструкция» (nav = {"toc": gid, "guide": gid})."""
+    toc = fx(f'=HYPERLINK("#gid={nav["toc"]}","← Оглавление")', sep) if nav.get("toc") is not None else ""
+    guide = fx(f'=HYPERLINK("#gid={nav["guide"]}","📖 Инструкция")', sep) if nav.get("guide") is not None else ""
+    return toc, guide
+
+
+def link_style(sheet_id: int, row: int, cols: list[int], size: int = 11) -> list[dict]:
+    return [{"repeatCell": {"range": {"sheetId": sheet_id, "startRowIndex": row, "endRowIndex": row + 1,
+                                      "startColumnIndex": c, "endColumnIndex": c + 1},
+                            "cell": {"userEnteredFormat": {"textFormat": {
+                                "foregroundColor": LINK_BLUE, "underline": True, "fontSize": size}}},
+                            "fields": "userEnteredFormat.textFormat"}} for c in cols]
+
+
 def partner_tab_values(name: str, start: date, end: date, clients: list[dict] | None = None,
                        sep: str = ";", gid: int | None = None,
-                       days: dict | None = None) -> list[list]:
+                       days: dict | None = None, nav: dict | None = None) -> list[list]:
     """Значения вкладки целиком (USER_ENTERED): заголовки, ссылки-переходы, даты, клиенты, часы."""
     width = PLAN_COL0 + len(PLAN_HEADERS)
     grid = [["" for _ in range(width)] for _ in range(HEADER_ROW + CLIENT_ROWS)]
@@ -235,11 +257,13 @@ def partner_tab_values(name: str, start: date, end: date, clients: list[dict] | 
     grid[1][0] = ("Следующий шаг — что и когда запланировано, он сам копируется в касания справа. "
                   "Красным — клиент без шага в ближайшие 7 дней.")
     grid[0][PLAN_COL0] = "Мои часы по дням"
-    grid[1][PLAN_COL0] = "Вечером: факт за сегодня (зелёная строка) и план на завтра (голубая)."
+    grid[1][PLAN_COL0] = ("Вечером: в зелёной строке (сегодня) — факт рядом с планом, "
+                          "в голубой (завтра) — план. Ничего не стирайте: план и факт стоят рядом.")
     if gid is not None:
         plan_cell = f"{col_letter(PLAN_COL0)}{HEADER_ROW}"
         grid[0][COL_NEXT_DATE] = fx(f'=HYPERLINK("#gid={gid}&range={plan_cell}","→ к моим часам")', sep)
         grid[0][PLAN_COL0 + 3] = fx(f'=HYPERLINK("#gid={gid}&range=A{HEADER_ROW}","← к клиентам")', sep)
+    grid[2][0], grid[2][1] = nav_links(nav or {}, sep)
     for i, h in enumerate(CRM_HEADERS):
         grid[HEADER_ROW - 1][i] = h
     for i, h in enumerate(PLAN_HEADERS):
@@ -251,6 +275,10 @@ def partner_tab_values(name: str, start: date, end: date, clients: list[dict] | 
             break
         row = grid[FIRST_ROW - 1 + k]
         row[PLAN_COL0] = d.isoformat()
+        r = FIRST_ROW + k
+        pl = f"{col_letter(PLAN_COL0 + P_PLAN)}{r}:{col_letter(PLAN_COL0 + P_PLAN + 2)}{r}"
+        fa = f"{col_letter(PLAN_COL0 + P_FACT)}{r}:{col_letter(PLAN_COL0 + P_FACT + 2)}{r}"
+        row[PLAN_COL0 + P_PCT] = fx(f'=IF(OR(SUM({pl})=0,COUNT({fa})=0),"",SUM({fa})/SUM({pl}))', sep)
         dp = (days or {}).get(d)
         if dp:
             for i, p in enumerate(PROCESSES):
@@ -260,7 +288,8 @@ def partner_tab_values(name: str, start: date, end: date, clients: list[dict] | 
                     row[PLAN_COL0 + P_FACT + i] = dp.fact[p]
                 if p in dp.people:
                     row[PLAN_COL0 + P_PEOPLE + i] = dp.people[p]
-            row[PLAN_COL0 + P_COMMENT] = dp.comment
+            row[PLAN_COL0 + P_PLAN_NOTE] = dp.plan_note
+            row[PLAN_COL0 + P_FACT_NOTE] = dp.fact_note
     for k, c in enumerate(clients or []):
         row = grid[FIRST_ROW - 1 + k]
         row[COL_NAME] = c.get("name", "")
@@ -324,6 +353,7 @@ def partner_tab_format_requests(sheet_id: int, sep: str = ";", service_email: st
         *[{"repeatCell": {"range": rng(0, 1, c, c + 1), "cell": {"userEnteredFormat": {"textFormat": {
             "foregroundColor": LINK_BLUE, "underline": True, "bold": True, "fontSize": 12}}},
             "fields": "userEnteredFormat.textFormat"}} for c in (COL_NEXT_DATE, PLAN_COL0 + 3)],
+        *link_style(sheet_id, 2, [0, 1]),
         fill(rng(h0, HEADER_ROW, 0, crm_w), HEAD_BG, bold=True, wrap=True),
         fill(rng(h0, HEADER_ROW, COL_NEXT_DATE, COL_NEXT_WHAT + 1), NEXT_BG, bold=True, wrap=True),
         fill(rng(h0, HEADER_ROW, PLAN_COL0, PLAN_COL0 + plan_w), PLAN_BG, bold=True, wrap=True),
@@ -333,20 +363,31 @@ def partner_tab_format_requests(sheet_id: int, sep: str = ";", service_email: st
         date_fmt(rng(f0, last, PLAN_COL0, PLAN_COL0 + 1)),
         width(0, 1, 40), width(1, 2, 190), width(2, 3, 140), width(3, 4, 110), width(4, 5, 190),
         width(5, 6, 170), width(6, 7, 260), width(7, crm_w, 100), width(crm_w, crm_w + 1, 24),
-        width(PLAN_COL0, PLAN_COL0 + 1, 95), width(PLAN_COL0 + P_PLAN, PLAN_COL0 + P_PEOPLE, 100),
-        width(PLAN_COL0 + P_PEOPLE, PLAN_COL0 + P_COMMENT, 90),
-        width(PLAN_COL0 + P_COMMENT, PLAN_COL0 + P_COMMENT + 1, 260),
-        fill(rng(h0, HEADER_ROW, PLAN_COL0 + P_PEOPLE, PLAN_COL0 + P_COMMENT), PEOPLE_BG, bold=True, wrap=True),
+        width(PLAN_COL0, PLAN_COL0 + 1, 95), width(PLAN_COL0 + P_PLAN, PLAN_COL0 + P_PLAN_NOTE, 95),
+        width(PLAN_COL0 + P_PLAN_NOTE, PLAN_COL0 + P_PLAN_NOTE + 1, 220),
+        width(PLAN_COL0 + P_FACT, PLAN_COL0 + P_PEOPLE, 95),
+        width(PLAN_COL0 + P_PEOPLE, PLAN_COL0 + P_FACT_NOTE, 85),
+        width(PLAN_COL0 + P_FACT_NOTE, PLAN_COL0 + P_FACT_NOTE + 1, 240),
+        width(PLAN_COL0 + P_PCT, PLAN_COL0 + P_PCT + 1, 75),
+        fill(rng(h0, HEADER_ROW, PLAN_COL0 + P_FACT, PLAN_COL0 + P_PEOPLE), FACT_BG, bold=True, wrap=True),
+        fill(rng(h0, HEADER_ROW, PLAN_COL0 + P_FACT_NOTE, PLAN_COL0 + P_FACT_NOTE + 1), FACT_BG, bold=True, wrap=True),
+        fill(rng(h0, HEADER_ROW, PLAN_COL0 + P_PEOPLE, PLAN_COL0 + P_FACT_NOTE), PEOPLE_BG, bold=True, wrap=True),
+        fill(rng(h0, HEADER_ROW, PLAN_COL0 + P_PCT, PLAN_COL0 + P_PCT + 1), HEAD_BG, bold=True, wrap=True),
+        fill(rng(f0, last, PLAN_COL0 + P_PCT, PLAN_COL0 + P_PCT + 1), {"red": 1, "green": 1, "blue": 1}),
+        {"repeatCell": {"range": rng(f0, last, PLAN_COL0 + P_PCT, PLAN_COL0 + P_PCT + 1), "cell": {
+            "userEnteredFormat": {"numberFormat": {"type": "PERCENT", "pattern": "0%"},
+                                  "horizontalAlignment": "CENTER"}},
+            "fields": "userEnteredFormat.numberFormat,userEnteredFormat.horizontalAlignment"}},
         {"updateDimensionProperties": {"range": {"sheetId": sheet_id, "dimension": "ROWS",
                                                  "startIndex": h0, "endIndex": HEADER_ROW},
                                        "properties": {"pixelSize": 48}, "fields": "pixelSize"}},
         {"setDataValidation": {"range": rng(f0, last, COL_STATUS, COL_STATUS + 1), "rule": {
             "condition": {"type": "ONE_OF_LIST", "values": [{"userEnteredValue": s} for s in STATUSES]},
             "showCustomUi": True, "strict": False}}},
-        {"setDataValidation": {"range": rng(f0, last, PLAN_COL0 + P_PLAN, PLAN_COL0 + P_PEOPLE), "rule": {
+        *[{"setDataValidation": {"range": rng(f0, last, PLAN_COL0 + c0, PLAN_COL0 + c0 + 3), "rule": {
             "condition": {"type": "NUMBER_GREATER_THAN_EQ", "values": [{"userEnteredValue": "0"}]},
-            "inputMessage": "Часы числом, например 1,5", "strict": True}}},
-        {"setDataValidation": {"range": rng(f0, last, PLAN_COL0 + P_PEOPLE, PLAN_COL0 + P_COMMENT), "rule": {
+            "inputMessage": "Часы числом, например 1,5", "strict": True}}} for c0 in (P_PLAN, P_FACT)],
+        {"setDataValidation": {"range": rng(f0, last, PLAN_COL0 + P_PEOPLE, PLAN_COL0 + P_FACT_NOTE), "rule": {
             "condition": {"type": "NUMBER_GREATER_THAN_EQ", "values": [{"userEnteredValue": "0"}]},
             "inputMessage": "Сколько людей было в работе по этому процессу сегодня", "strict": True}}},
         date_rule(COL_NEXT_DATE, "Когда следующий шаг? Выберите дату в календаре (двойной клик)"),
@@ -369,7 +410,7 @@ def partner_tab_format_requests(sheet_id: int, sep: str = ";", service_email: st
         reqs.append(date_rule(c, "Дата прошедшего касания (календарь — двойной клик)"))
     if service_email:   # заголовки и даты в часах правит только бот (владелец таблицы — всегда)
         for r in (rng(0, HEADER_ROW, 0, PLAN_COL0 + plan_w), rng(f0, last, PLAN_COL0, PLAN_COL0 + 1),
-                  rng(f0, last, 0, 1)):
+                  rng(f0, last, 0, 1), rng(f0, last, PLAN_COL0 + P_PCT, PLAN_COL0 + P_PCT + 1)):
             reqs.append({"addProtectedRange": {"protectedRange": {
                 "range": r, "description": "bot:заголовки", "warningOnly": False,
                 "editors": {"users": [service_email]}}}})

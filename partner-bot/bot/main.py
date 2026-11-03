@@ -53,12 +53,30 @@ HELP = (
     "/week — итоги последних 7 дней\n"
     "/status — проверка настроек\n"
     "/bindchat — отправить в чате (или теме) партнёров, куда слать напоминания\n"
+    "/pause — пауза рассылок (до завтрашнего полудня или /pause 2026-11-10), /resume — включить\n"
     "/setsheet ссылка — основная таблица\n"
     "/setsandbox ссылка — таблица-песочница новых партнёров\n"
     "/addpartner Фамилия Имя @ник — добавить новичка в песочницу\n"
     "/promote Фамилия Имя — перевести из песочницы в основную таблицу\n"
     "/myid — id чата и пользователя"
 )
+
+
+# Тишина до этого момента (МСК): ни напоминаний, ни сводок. Просьба Полины 03.11.
+QUIET_UNTIL = "2026-11-04T12:00"
+
+
+def _paused(ctx) -> bool:
+    """Пауза рассылок: до QUIET_UNTIL или пока руководитель не скажет /resume."""
+    cfg = _cfg(ctx)
+    until = _store(ctx).get_setting("pause_until") or QUIET_UNTIL
+    if until == "off":
+        return False
+    try:
+        end = datetime.fromisoformat(until).replace(tzinfo=cfg.tz)
+    except ValueError:
+        return False
+    return datetime.now(cfg.tz) < end
 
 
 def _cfg(ctx) -> Config:
@@ -357,6 +375,30 @@ async def cmd_setsandbox(update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> None
     await _set_book(update, ctx, "sandbox_id", sandbox=True)
 
 
+async def cmd_pause(update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> None:
+    """/pause — до конца следующего утра; /pause 2026-11-10 — до даты (включительно)."""
+    if not _is_manager(ctx, update):
+        return await _deny(update)
+    cfg = _cfg(ctx)
+    arg = (ctx.args[0] if ctx.args else "").strip()
+    try:
+        until = datetime.fromisoformat(arg).replace(hour=23, minute=59) if arg else \
+            datetime.now(cfg.tz).replace(hour=12, minute=0, second=0, microsecond=0) + __import__("datetime").timedelta(days=1)
+    except ValueError:
+        await update.effective_message.reply_text("Так: /pause или /pause 2026-11-10")
+        return
+    _store(ctx).set_setting("pause_until", until.strftime("%Y-%m-%dT%H:%M"))
+    await update.effective_message.reply_text(
+        f"⏸ Рассылки на паузе до {until:%d.%m %H:%M}: ни сводок, ни напоминаний. Вернуть раньше — /resume")
+
+
+async def cmd_resume(update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> None:
+    if not _is_manager(ctx, update):
+        return await _deny(update)
+    _store(ctx).set_setting("pause_until", "off")
+    await update.effective_message.reply_text("▶️ Рассылки снова включены: сводка в 8:00, напоминания в 18:30.")
+
+
 async def cmd_status(update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> None:
     if not _is_manager(ctx, update):
         return await _deny(update)
@@ -382,12 +424,18 @@ async def cmd_status(update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> None:
     cfg = _cfg(ctx)
     rt = cfg.reminder_time.strftime("%H:%M") if cfg.reminder_time else "выкл"
     lines.append(f"Сводка в {cfg.report_time:%H:%M}, напоминание в {rt}")
+    if _paused(ctx):
+        until = store.get_setting("pause_until") or QUIET_UNTIL
+        lines.append(f"⏸ Рассылки на паузе до {until.replace('T', ' ')} — /resume, чтобы включить")
     await _send(ctx, update.effective_chat.id, "\n".join(lines))
 
 
 # ---------- расписание ----------
 
 async def job_morning(ctx: ContextTypes.DEFAULT_TYPE) -> None:
+    if _paused(ctx):
+        log.info("Пауза рассылок — утреннюю сводку не отправляю")
+        return
     cfg = _cfg(ctx)
     net = await _network(ctx)
     texts = [morning_text(net)]
@@ -405,6 +453,9 @@ async def job_morning(ctx: ContextTypes.DEFAULT_TYPE) -> None:
 
 
 async def job_evening(ctx: ContextTypes.DEFAULT_TYPE) -> None:
+    if _paused(ctx):
+        log.info("Пауза рассылок — вечерние напоминания не отправляю")
+        return
     store = _store(ctx)
     net = await _network(ctx)
     chat = _partners_chat(ctx)
@@ -454,6 +505,8 @@ def main() -> None:
     app.add_handler(CommandHandler("setsheet", cmd_setsheet))
     app.add_handler(CommandHandler("setsandbox", cmd_setsandbox))
     app.add_handler(CommandHandler("status", cmd_status))
+    app.add_handler(CommandHandler("pause", cmd_pause))
+    app.add_handler(CommandHandler("resume", cmd_resume))
     app.add_handler(CommandHandler("join", cmd_join))
     app.add_handler(CommandHandler("addpartner", cmd_addpartner))
     app.add_handler(CommandHandler("promote", cmd_promote))

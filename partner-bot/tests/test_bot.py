@@ -24,11 +24,13 @@ def partner_sheet(wb, name, clients, days=None, start=date(2026, 11, 3)):
     for row in grid:
         ws.append([date.fromisoformat(v) if isinstance(v, str) and len(v) == 10 and v[4] == "-" else
                    (None if isinstance(v, str) and v.startswith("=") else v) for v in row])
+    from bot.workbook import P_FACT, P_PEOPLE, P_PLAN
     for d, plan, fact, *people in days or []:
         r = 5 + (d - start).days
-        for i, v in enumerate(list(plan) + list(fact) + list(people[0] if people else ())):
-            if v is not None:
-                ws.cell(row=r, column=PLAN_COL0 + 2 + i, value=v)
+        for off, vals in ((P_PLAN, plan), (P_FACT, fact), (P_PEOPLE, people[0] if people else ())):
+            for i, v in enumerate(vals):
+                if v is not None:
+                    ws.cell(row=r, column=PLAN_COL0 + off + 1 + i, value=v)
     return ws
 
 
@@ -148,8 +150,10 @@ def test_layout_and_formulas():
     assert head[1:7] == ["Имя клиента", "Откуда пришёл", "Следующий шаг: дата", "Следующий шаг: что",
                          "Текущий статус", "Что происходит"]
     assert head[7] == "Дата 1-го касания" and head[PLAN_COL0] == "Дата" and PLAN_COL0 == 18
-    assert head[PLAN_COL0 + 7:PLAN_COL0 + 11] == ["Привлечение — людей", "Прогрев — людей", "Закрытие — людей",
-                                                  "Что делал(а) / комментарий"]
+    assert head[PLAN_COL0 + 4] == "План: что буду делать"
+    assert head[PLAN_COL0 + 8:PLAN_COL0 + 13] == ["Привлечение — людей", "Прогрев — людей", "Закрытие — людей",
+                                                  "Факт: что сделал(а)", "% плана"]
+    assert grid[4][PLAN_COL0 + 12] == '=IF(OR(SUM(T5:V5)=0;COUNT(X5:Z5)=0);"";SUM(X5:Z5)/SUM(T5:V5))'
     assert grid[4][COL_NEXT_DATE] == "2026-11-06" and grid[4][COL_NEXT_WHAT] == "созвон с Антоном"
     assert grid[0][COL_NEXT_DATE] == '=HYPERLINK("#gid=77&range=S4";"→ к моим часам")'
     assert grid[0][PLAN_COL0 + 3] == '=HYPERLINK("#gid=77&range=A4";"← к клиентам")'
@@ -157,7 +161,7 @@ def test_layout_and_formulas():
     reqs = json.dumps(partner_tab_format_requests(42, service_email="bot@x"), ensure_ascii=False)
     assert 'OR($D5=\\"\\";$D5<TODAY();$D5>TODAY()+7)' in reqs
     assert "=$S5=TODAY()+1" in reqs and "DATE_IS_VALID" in reqs
-    assert reqs.count("addProtectedRange") == 3
+    assert reqs.count("addProtectedRange") == 4
 
 
 class Resp:
