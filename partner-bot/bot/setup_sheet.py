@@ -24,6 +24,17 @@ SPRINT_END = date(2026, 12, 31)
 TOC, SUMMARY, PARTNERS = "Оглавление", "Сводка", "Партнёры"
 
 
+def service_email() -> str:
+    """Email сервисного аккаунта бота — из ключа (для защиты заголовков)."""
+    import json
+    import os
+    try:
+        path = os.environ.get("GOOGLE_SERVICE_ACCOUNT_FILE", "secrets/service-account.json")
+        return json.load(open(path))["client_email"]
+    except Exception:
+        return ""
+
+
 class _Retrying:
     """Обёртка над сессией: при 429 (лимит Google 60 запросов в минуту) ждёт и повторяет."""
     def __init__(self, session):
@@ -95,10 +106,12 @@ class Sheet:
         return res["replies"][0]["addSheet"]["properties"]["sheetId"]
 
 
-def create_partner_tab(sh: Sheet, name: str, start: date, clients: list[dict] | None = None) -> int:
-    sid = sh.add_tab(name, cols=PLAN_COL0 + len(PLAN_HEADERS) + 1)
-    sh.put(f"'{name}'!A1", partner_tab_values(name, start, SPRINT_END, clients, sh.sep()))
-    sh.batch(partner_tab_format_requests(sid, sh.sep()))
+def create_partner_tab(sh: Sheet, name: str, start: date, clients: list[dict] | None = None,
+                       days: dict | None = None, tab_title: str | None = None) -> int:
+    title = tab_title or name
+    sid = sh.add_tab(title, cols=PLAN_COL0 + len(PLAN_HEADERS) + 1)
+    sh.put(f"'{title}'!A1", partner_tab_values(name, start, SPRINT_END, clients, sh.sep(), sid, days))
+    sh.batch(partner_tab_format_requests(sid, sh.sep(), service_email()))
     log.info("Создана вкладка партнёра «%s» (%d клиентов)", name, len(clients or []))
     return sid
 
@@ -222,3 +235,39 @@ def main() -> None:
 
 if __name__ == "__main__":
     main()
+
+
+def rebuild_partner_tabs(session, spreadsheet_id: str, today: date, only: list[str] | None = None) -> list[str]:
+    """Пересобирает вкладки партнёров по новому макету, сохраняя клиентов и часы.
+    Будущие даты из истории касаний становятся «Следующим шагом»."""
+    from .sheets import fetch_xlsx
+    from .workbook import parse_partner_tabs
+    import os
+    sa = os.environ.get("GOOGLE_SERVICE_ACCOUNT_FILE", "secrets/service-account.json")
+    sh = Sheet(session, spreadsheet_id)
+    data, _ = fetch_xlsx(spreadsheet_id, sa, session)
+    tabs = sh.tabs()
+    done = []
+    for t in parse_partner_tabs(data):
+        if only and t.name not in only:
+            continue
+        clients = []
+        for l in t.clients:
+            future = sorted((x for x in l.touches if x.when and x.when >= today), key=lambda x: x.when)
+            nxt = l.next_date or (future[0].when if future else None)
+            what = l.next_what or (future[0].fmt if future and not l.next_date else "")
+            history = [x for x in l.touches if not (x.when and x.when >= today)]
+            clients.append({
+                "name": l.name, "source": l.source, "status": l.status, "description": l.description,
+                "next_date": nxt.isoformat() if nxt else "", "next_what": what,
+                "touches": [{"n": i + 1, "date": x.when.isoformat() if x.when else x.raw, "fmt": x.fmt}
+                            for i, x in enumerate(history[:5])]})
+        start = min(t.days) if t.days else today
+        tmp = f"_новая {t.name}"
+        new_id = create_partner_tab(sh, t.name, start, clients, t.days, tab_title=tmp)
+        # новая вкладка готова — только теперь убираем старую и переименовываем
+        sh.batch([{"deleteSheet": {"sheetId": tabs[t.name]}},
+                  {"updateSheetProperties": {"properties": {"sheetId": new_id, "title": t.name},
+                                             "fields": "title"}}])
+        done.append(t.name)
+    return done

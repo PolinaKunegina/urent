@@ -12,7 +12,7 @@ from bot.partners import UNKNOWN, Directory
 from bot.setup_sheet import ensure_structure
 from bot.sheets import PARTNERS_HEADER, to_date
 from bot.store import Store
-from bot.workbook import (COL_NEXT, PLAN_COL0, fx, next_touch_formula, parse_partner_tabs,
+from bot.workbook import (COL_NEXT_DATE, COL_NEXT_WHAT, PLAN_COL0, fx, parse_partner_tabs,
                           partner_tab_format_requests, partner_tab_values, sep_for_locale)
 
 TODAY = date(2026, 11, 10)
@@ -42,12 +42,14 @@ def network_xlsx():
     p.append(["Новикова Дарья", "", ""])
     d = lambda x: (TODAY + timedelta(days=x)).isoformat()
     partner_sheet(wb, "Петрова Анна", [
-        {"name": "Котова Вера", "source": "мероприятие", "touches": [{"n": 1, "date": d(-5)}, {"n": 2, "date": d(2)}]},
-        {"name": "Лисина Ада", "touches": [{"n": 1, "date": d(-5)}, {"n": 2, "date": d(12)}]},  # дальше 7 дней
-        {"name": "Жуков Илья", "touches": [{"n": 1, "date": d(-9)}]},                           # нет плана
+        {"name": "Котова Вера", "source": "мероприятие", "next_date": d(2), "next_what": "созвон с Антоном",
+         "touches": [{"n": 1, "date": d(-5), "fmt": "встреча"}]},
+        {"name": "Лисина Ада", "next_date": d(12), "touches": [{"n": 1, "date": d(-5)}]},   # дальше 7 дней
+        {"name": "Жуков Илья", "touches": [{"n": 1, "date": d(-9)}]},                       # нет шага
         {"name": "Ильин Олег", "status": "Оплатил пакет 240 / стал ментором", "touches": [{"n": 1, "date": d(-9)}]},
         {"name": "Гусев Семён", "status": "Отказ"},
-        {"name": "Соколова Ия", "touches": [{"n": 1, "date": d(1)}]},
+        {"name": "Соколова Ия", "touches": [{"n": 1, "date": d(-3)}, {"n": 2, "date": d(1)}]},  # старый способ
+        {"name": "Белых Ян", "next_date": d(-1), "next_what": "созвон"},                     # просрочен
     ], days=[(TODAY - timedelta(days=1), [2, 1, 0], [1.5, 1, 0]),
              (TODAY - timedelta(days=2), [1, 1, 1], [1, 2, 1]),
              (TODAY, [None, None, None], [1, 0, 0]),
@@ -70,9 +72,10 @@ def test_parse_partner_tabs():
     assert set(tabs) == {"Петрова Анна", "Орлов Пётр", "Новикова Дарья"}   # «Лист2» не вкладка
     anna = tabs["Петрова Анна"]
     assert [c.name for c in anna.clients][:2] == ["Котова Вера", "Лисина Ада"]
-    assert anna.clients[0].source == "мероприятие" and anna.clients[0].row == 5
-    assert [(t.n, t.when) for t in anna.clients[0].touches] == [(1, TODAY - timedelta(days=5)),
-                                                                 (2, TODAY + timedelta(days=2))]
+    kv = anna.clients[0]
+    assert kv.source == "мероприятие" and kv.row == 5
+    assert kv.next_date == TODAY + timedelta(days=2) and kv.next_what == "созвон с Антоном"
+    assert [(t.n, t.when, t.fmt) for t in kv.touches] == [(1, TODAY - timedelta(days=5), "встреча")]
     y = anna.days[TODAY - timedelta(days=1)]
     assert y.plan == {"attract": 2, "warmup": 1, "close": 0} and y.fact == {"attract": 1.5, "warmup": 1, "close": 0}
     assert min(anna.days) == date(2026, 11, 3) and max(anna.days) == date(2026, 12, 31)
@@ -80,15 +83,15 @@ def test_parse_partner_tabs():
 
 def test_compute_partner():
     s = stats()["Петрова Анна"]
-    assert [l.name for l in s.active] == ["Котова Вера", "Лисина Ада", "Жуков Илья", "Соколова Ия"]
+    assert [l.name for l in s.active] == ["Котова Вера", "Лисина Ада", "Жуков Илья", "Соколова Ия", "Белых Ян"]
     assert [l.name for l in s.closed] == ["Ильин Олег"]
-    assert [l.name for l in s.no_touch] == ["Лисина Ада", "Жуков Илья"]
+    assert [l.name for l in s.no_touch] == ["Лисина Ада", "Жуков Илья", "Белых Ян"]
     assert [l.name for l in s.touch_tomorrow] == ["Соколова Ия"]
     assert s.fact_days == 2 and s.window == 7
     assert s.week == {"attract": 2.5, "warmup": 3, "close": 1}
     assert s.today_fact == {"attract": 1, "warmup": 0, "close": 0}
     assert s.tomorrow_plan == {"attract": 2, "warmup": 2, "close": 0}
-    assert s.activity == round(100 * (2 / 7 + 2 / 4) / 2)
+    assert s.activity == round(100 * (2 / 7 + 2 / 5) / 2)
 
 
 def test_activity_first_days_only_counts_since_start():
@@ -100,8 +103,8 @@ def test_activity_first_days_only_counts_since_start():
 def test_morning_report():
     text = render_morning(list(stats().values()), TODAY, "https://sheet")
     assert "Партнёров: <b>3</b>" in text
-    assert "без касания в ближайшие 7 дней: <b>2</b>" in text
-    assert "<b>Петрова Анна</b> (2): Лисина Ада, Жуков Илья" in text
+    assert "без касания в ближайшие 7 дней: <b>3</b>" in text
+    assert "<b>Петрова Анна</b> (3): Лисина Ада, Жуков Илья, Белых Ян" in text
     assert "Ещё не внесли клиентов: Новикова Дарья" in text
     assert "<b>Петрова Анна</b>: привлечение 1,5 (2) · прогрев 1 (1) · закрытие 0 (0)" in text
     assert "Не заполнили факт: Новикова Дарья, Орлов Пётр" in text
@@ -114,7 +117,7 @@ def test_weekly_and_summary():
     assert "Итоги недели 03.11–09.11" in w and "Петрова Анна" in w
     rows = summary_rows(st)
     anna = next(r for r in rows if r[0] == "Петрова Анна")
-    assert anna[2:6] == [4, 2, 50, 2] and anna[6:9] == [2.5, 3, 1]
+    assert anna[2:6] == [5, 3, 40, 2] and anna[6:9] == [2.5, 3, 1]
 
 
 def test_evening_texts():
@@ -122,23 +125,31 @@ def test_evening_texts():
     chat = render_evening_chat(list(st.values()), TODAY)
     assert "Факт за сегодня ещё не заполнили: Новикова Дарья, Орлов Пётр" in chat
     p = render_partner_status(st["Петрова Анна"], TODAY, "https://tab")
-    assert "Нет касания в ближайшие 7 дней (2)" in p and "Соколова Ия" in p
+    assert "Нет касания в ближайшие 7 дней (3)" in p and "Соколова Ия" in p
     assert "Факт за сегодня: привлечение 1 · прогрев 0 · закрытие 0 ч" in p
     assert "План на завтра: привлечение 2" in p and "https://tab" in p
     assert needs_evening_ping(st["Петрова Анна"])
     assert "нет твоих клиентов" in render_partner_status(st["Новикова Дарья"], TODAY)
 
 
-def test_formulas_follow_locale():
+def test_layout_and_formulas():
     assert sep_for_locale("ru_RU") == ";" and sep_for_locale("en_US") == ","
-    assert next_touch_formula(5) == ('=IF(B5="";"";IF(MINIFS(D5:M5;D5:M5;">="&TODAY())=0;"нет плана";'
-                                     'MINIFS(D5:M5;D5:M5;">="&TODAY())))')
     assert fx('=HYPERLINK("#gid=1","a,b")', ";") == '=HYPERLINK("#gid=1";"a,b")'
-    grid = partner_tab_values("Анна", date(2026, 11, 3), date(2026, 12, 31))
-    assert grid[3][1] == "Имя клиента" and grid[4][COL_NEXT].startswith("=IF(B5")
+    grid = partner_tab_values("Анна", date(2026, 11, 3), date(2026, 12, 31), gid=77,
+                              clients=[{"name": "Котова Вера", "next_date": "2026-11-06",
+                                        "next_what": "созвон с Антоном"}])
+    head = grid[3]
+    assert head[1:7] == ["Имя клиента", "Откуда пришёл", "Следующий шаг: дата", "Следующий шаг: что",
+                         "Текущий статус", "Что происходит"]
+    assert head[7] == "Дата 1-го касания" and head[PLAN_COL0] == "Дата" and PLAN_COL0 == 18
+    assert grid[4][COL_NEXT_DATE] == "2026-11-06" and grid[4][COL_NEXT_WHAT] == "созвон с Антоном"
+    assert grid[0][COL_NEXT_DATE] == '=HYPERLINK("#gid=77&range=S4";"→ к моим часам")'
+    assert grid[0][PLAN_COL0 + 3] == '=HYPERLINK("#gid=77&range=A4";"← к клиентам")'
     assert grid[4][PLAN_COL0] == "2026-11-03" and grid[62][PLAN_COL0] == "2026-12-31"
-    reqs = json.dumps(partner_tab_format_requests(42), ensure_ascii=False)
-    assert 'OR($P5=\\"нет плана\\";$P5>TODAY()+7)' in reqs and "DATE_IS_VALID" in reqs
+    reqs = json.dumps(partner_tab_format_requests(42, service_email="bot@x"), ensure_ascii=False)
+    assert 'OR($D5=\\"\\";$D5<TODAY();$D5>TODAY()+7)' in reqs
+    assert "=$S5=TODAY()+1" in reqs and "DATE_IS_VALID" in reqs
+    assert reqs.count("addProtectedRange") == 3
 
 
 class Resp:

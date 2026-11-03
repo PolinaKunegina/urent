@@ -62,6 +62,9 @@ class PartnerStats:
 
 
 def _next_touch(l: Lead, today: date) -> date | None:
+    """«Следующий шаг: дата»; если её нет — ближайшая будущая дата в истории касаний."""
+    if l.next_date:
+        return l.next_date
     future = [t.when for t in l.touches if t.when and t.when >= today]
     return min(future) if future else None
 
@@ -77,7 +80,7 @@ def compute_partner(tab: PartnerTab, today: date) -> PartnerStats:
             continue
         ps.active.append(l)
         nt = _next_touch(l, today)
-        if nt is None or nt > today + timedelta(days=HORIZON):
+        if nt is None or nt < today or nt > today + timedelta(days=HORIZON):
             ps.no_touch.append(l)
         if nt == today:
             ps.touch_today.append(l)
@@ -189,7 +192,7 @@ def render_weekly(stats: list[PartnerStats], today: date) -> str:
 
 def render_evening_chat(stats: list[PartnerStats], today: date) -> str:
     text = ("Коллеги, напоминание 🌿 До 19:00 в таблице:\n"
-            "• у каждого клиента — дата следующего касания;\n"
+            "• у каждого клиента — следующий шаг с датой;\n"
             "• справа — <b>факт за сегодня</b> и <b>план на завтра</b> по часам: привлечение, прогрев, закрытие.")
     silent = [s.label for s in stats if not s.today_fact]
     if silent:

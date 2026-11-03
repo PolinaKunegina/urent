@@ -28,15 +28,16 @@ FIRST_ROW = HEADER_ROW + 1
 CLIENT_ROWS = 100              # сколько строк под клиентов
 CRM_HEADERS = [
     "№", "Имя клиента", "Откуда пришёл",
+    "Следующий шаг: дата", "Следующий шаг: что",
+    "Текущий статус", "Что происходит",
     "Дата 1-го касания", "Формат", "Дата 2-го касания", "Формат", "Дата 3-го касания", "Формат",
     "Дата 4-го касания", "Формат", "Дата 5-го касания", "Формат",
-    "Текущий статус", "Что происходит", "Ближайшее касание (авто)",
 ]
-COL_NAME, COL_SOURCE, COL_STATUS, COL_DESC, COL_NEXT = 1, 2, 13, 14, 15
-TOUCH_COLS = [(n, 3 + 2 * (n - 1), 4 + 2 * (n - 1)) for n in range(1, 6)]   # (n, дата, формат)
+COL_NAME, COL_SOURCE, COL_NEXT_DATE, COL_NEXT_WHAT, COL_STATUS, COL_DESC = 1, 2, 3, 4, 5, 6
+TOUCH_COLS = [(n, 7 + 2 * (n - 1), 8 + 2 * (n - 1)) for n in range(1, 6)]   # история: (n, дата, формат)
 DATE_COLS = [d for _, d, _ in TOUCH_COLS]
 
-PLAN_COL0 = 17                 # колонка R — начало блока планирования
+PLAN_COL0 = len(CRM_HEADERS) + 1   # колонка S — начало блока часов (R — узкий разделитель)
 PLAN_HEADERS = [
     "Дата",
     "Привлечение — план, ч", "Прогрев — план, ч", "Закрытие — план, ч",
@@ -127,6 +128,7 @@ def _parse_rows(title: str, rows: list[tuple], sandbox: bool) -> PartnerTab:
 
     c_name, c_src = idx.get("имя клиента"), find("откуда")
     c_status, c_desc = find("текущий статус"), find("что происходит")
+    c_next_date, c_next_what = find("следующий шаг: дата"), find("следующий шаг: что")
     touch_cols = []
     for i, h in enumerate(head):
         m = re.match(r"дата\s*(\d+)", h)
@@ -155,7 +157,9 @@ def _parse_rows(title: str, rows: list[tuple], sandbox: bool) -> PartnerTab:
             tab.clients.append(Lead(row=r_num, number="", name=name,
                                     source=_clean(cell(row, c_src)),
                                     status=_clean(cell(row, c_status)),
-                                    description=_clean(cell(row, c_desc)), touches=touches))
+                                    description=_clean(cell(row, c_desc)), touches=touches,
+                                    next_date=to_date(cell(row, c_next_date)),
+                                    next_what=_clean(cell(row, c_next_what))))
         d = to_date(cell(row, c_date))
         if d:
             plan = {p: v for p in PROCESSES if (v := _num(cell(row, plan_cols[p]))) is not None}
@@ -180,6 +184,8 @@ PLAN_BG = {"red": 0.89, "green": 0.94, "blue": 0.99}
 RED_BG = {"red": 0.957, "green": 0.8, "blue": 0.8}
 RED_TEXT = {"red": 0.6, "green": 0.0, "blue": 0.0}
 TODAY_BG = {"red": 0.85, "green": 0.93, "blue": 0.83}
+TOMORROW_BG = {"red": 0.85, "green": 0.92, "blue": 0.98}
+NEXT_BG = {"red": 0.99, "green": 0.85, "blue": 0.7}
 
 
 def plan_dates(start: date, end: date) -> list[date]:
@@ -203,38 +209,46 @@ def fx(formula: str, sep: str) -> str:
     return "".join(out)
 
 
-def next_touch_formula(r: int, sep: str = ";") -> str:
-    d0, d1 = col_letter(DATE_COLS[0]), col_letter(DATE_COLS[-1] + 1)
-    mins = f'MINIFS({d0}{r}:{d1}{r},{d0}{r}:{d1}{r},">="&TODAY())'
-    return fx(f'=IF(B{r}="","",IF({mins}=0,"нет плана",{mins}))', sep)
-
-
 def partner_tab_values(name: str, start: date, end: date, clients: list[dict] | None = None,
-                       sep: str = ";") -> list[list]:
-    """Значения вкладки целиком (USER_ENTERED): заголовки, формулы, даты планирования, клиенты."""
+                       sep: str = ";", gid: int | None = None,
+                       days: dict | None = None) -> list[list]:
+    """Значения вкладки целиком (USER_ENTERED): заголовки, ссылки-переходы, даты, клиенты, часы."""
     width = PLAN_COL0 + len(PLAN_HEADERS)
     grid = [["" for _ in range(width)] for _ in range(HEADER_ROW + CLIENT_ROWS)]
     grid[0][0] = f"Клиенты — {name}"
-    grid[1][0] = ("Жёлтое заполняете вы: клиенты, даты касаний (выбирайте в календаре), статус. "
-                  "Красным — клиент без касания в ближайшие 7 дней.")
-    grid[0][PLAN_COL0] = "Планирование процессов, часы"
-    grid[1][PLAN_COL0] = "Вечером: факт за сегодня и план на завтра. Строка сегодняшнего дня — зелёная."
+    grid[1][0] = ("Следующий шаг — что и когда запланировано. Касания справа — история. "
+                  "Красным — клиент без шага в ближайшие 7 дней.")
+    grid[0][PLAN_COL0] = "Мои часы по дням"
+    grid[1][PLAN_COL0] = "Вечером: факт за сегодня (зелёная строка) и план на завтра (голубая)."
+    if gid is not None:
+        plan_cell = f"{col_letter(PLAN_COL0)}{HEADER_ROW}"
+        grid[0][COL_NEXT_DATE] = fx(f'=HYPERLINK("#gid={gid}&range={plan_cell}","→ к моим часам")', sep)
+        grid[0][PLAN_COL0 + 3] = fx(f'=HYPERLINK("#gid={gid}&range=A{HEADER_ROW}","← к клиентам")', sep)
     for i, h in enumerate(CRM_HEADERS):
         grid[HEADER_ROW - 1][i] = h
     for i, h in enumerate(PLAN_HEADERS):
         grid[HEADER_ROW - 1][PLAN_COL0 + i] = h
     for k in range(CLIENT_ROWS):
-        r = FIRST_ROW + k
-        row = grid[r - 1]
-        row[0] = k + 1
-        row[COL_NEXT] = next_touch_formula(r, sep)
+        grid[FIRST_ROW - 1 + k][0] = k + 1
     for k, d in enumerate(plan_dates(start, end)):
-        if k < CLIENT_ROWS:
-            grid[FIRST_ROW - 1 + k][PLAN_COL0] = d.isoformat()
+        if k >= CLIENT_ROWS:
+            break
+        row = grid[FIRST_ROW - 1 + k]
+        row[PLAN_COL0] = d.isoformat()
+        dp = (days or {}).get(d)
+        if dp:
+            for i, p in enumerate(PROCESSES):
+                if p in dp.plan:
+                    row[PLAN_COL0 + 1 + i] = dp.plan[p]
+                if p in dp.fact:
+                    row[PLAN_COL0 + 4 + i] = dp.fact[p]
+            row[PLAN_COL0 + 7] = dp.comment
     for k, c in enumerate(clients or []):
         row = grid[FIRST_ROW - 1 + k]
         row[COL_NAME] = c.get("name", "")
         row[COL_SOURCE] = c.get("source", "")
+        row[COL_NEXT_DATE] = c.get("next_date", "")
+        row[COL_NEXT_WHAT] = c.get("next_what", "")
         row[COL_STATUS] = c.get("status", "")
         row[COL_DESC] = c.get("description", "")
         for t in c.get("touches", []):
@@ -245,7 +259,7 @@ def partner_tab_values(name: str, start: date, end: date, clients: list[dict] | 
     return grid
 
 
-def partner_tab_format_requests(sheet_id: int, sep: str = ";") -> list[dict]:
+def partner_tab_format_requests(sheet_id: int, sep: str = ";", service_email: str = "") -> list[dict]:
     last = HEADER_ROW + CLIENT_ROWS
     crm_w, plan_w = len(CRM_HEADERS), len(PLAN_HEADERS)
 
@@ -275,10 +289,14 @@ def partner_tab_format_requests(sheet_id: int, sep: str = ";") -> list[dict]:
                                                         "startIndex": c0, "endIndex": c1},
                                               "properties": {"pixelSize": px}, "fields": "pixelSize"}}
 
+    def date_rule(c, msg):
+        return {"setDataValidation": {"range": rng(f0, last, c, c + 1), "rule": {
+            "condition": {"type": "DATE_IS_VALID"}, "inputMessage": msg, "strict": True}}}
+
     h0, f0 = HEADER_ROW - 1, FIRST_ROW - 1
-    no_touch = fx(f'=AND($B{FIRST_ROW}<>"",NOT(REGEXMATCH(LOWER($N{FIRST_ROW}),"{EXCLUDED_RE}|{CLOSED_RE}")),'
-                  f'OR($P{FIRST_ROW}="нет плана",$P{FIRST_ROW}>TODAY()+7))', sep)
-    plan_letter = col_letter(PLAN_COL0)
+    nd, st, pl = col_letter(COL_NEXT_DATE), col_letter(COL_STATUS), col_letter(PLAN_COL0)
+    no_step = fx(f'=AND($B{FIRST_ROW}<>"",NOT(REGEXMATCH(LOWER(${st}{FIRST_ROW}),"{EXCLUDED_RE}|{CLOSED_RE}")),'
+                 f'OR(${nd}{FIRST_ROW}="",${nd}{FIRST_ROW}<TODAY(),${nd}{FIRST_ROW}>TODAY()+7))', sep)
     reqs = [
         {"updateSheetProperties": {"properties": {"sheetId": sheet_id, "gridProperties": {
             "frozenRowCount": HEADER_ROW, "frozenColumnCount": 2}},
@@ -286,13 +304,14 @@ def partner_tab_format_requests(sheet_id: int, sep: str = ";") -> list[dict]:
         {"repeatCell": {"range": rng(0, 1, 0, PLAN_COL0 + plan_w), "cell": {"userEnteredFormat": {
             "textFormat": {"bold": True, "fontSize": 13}}}, "fields": "userEnteredFormat.textFormat"}},
         fill(rng(h0, HEADER_ROW, 0, crm_w), HEAD_BG, bold=True, wrap=True),
+        fill(rng(h0, HEADER_ROW, COL_NEXT_DATE, COL_NEXT_WHAT + 1), NEXT_BG, bold=True, wrap=True),
         fill(rng(h0, HEADER_ROW, PLAN_COL0, PLAN_COL0 + plan_w), PLAN_BG, bold=True, wrap=True),
-        fill(rng(f0, last, 1, COL_NEXT), YELLOW),
+        fill(rng(f0, last, 1, crm_w), YELLOW),
         fill(rng(f0, last, PLAN_COL0 + 1, PLAN_COL0 + plan_w), YELLOW),
-        date_fmt(rng(f0, last, COL_NEXT, COL_NEXT + 1)),
+        date_fmt(rng(f0, last, COL_NEXT_DATE, COL_NEXT_DATE + 1)),
         date_fmt(rng(f0, last, PLAN_COL0, PLAN_COL0 + 1)),
-        width(0, 1, 40), width(1, 2, 190), width(2, 3, 140), width(3, 13, 105),
-        width(13, 14, 170), width(14, 15, 260), width(15, 16, 120), width(16, 17, 24),
+        width(0, 1, 40), width(1, 2, 190), width(2, 3, 140), width(3, 4, 110), width(4, 5, 190),
+        width(5, 6, 170), width(6, 7, 260), width(7, crm_w, 100), width(crm_w, crm_w + 1, 24),
         width(PLAN_COL0, PLAN_COL0 + 1, 95), width(PLAN_COL0 + 1, PLAN_COL0 + 7, 100),
         width(PLAN_COL0 + 7, PLAN_COL0 + 8, 260),
         {"updateDimensionProperties": {"range": {"sheetId": sheet_id, "dimension": "ROWS",
@@ -304,20 +323,28 @@ def partner_tab_format_requests(sheet_id: int, sep: str = ";") -> list[dict]:
         {"setDataValidation": {"range": rng(f0, last, PLAN_COL0 + 1, PLAN_COL0 + 7), "rule": {
             "condition": {"type": "NUMBER_GREATER_THAN_EQ", "values": [{"userEnteredValue": "0"}]},
             "inputMessage": "Часы числом, например 1,5", "strict": True}}},
+        date_rule(COL_NEXT_DATE, "Когда следующий шаг? Выберите дату в календаре (двойной клик)"),
         {"addConditionalFormatRule": {"index": 0, "rule": {
-            "ranges": [rng(f0, last, COL_NAME, COL_NAME + 1), rng(f0, last, COL_NEXT, COL_NEXT + 1)],
-            "booleanRule": {"condition": {"type": "CUSTOM_FORMULA", "values": [{"userEnteredValue": no_touch}]},
+            "ranges": [rng(f0, last, COL_NAME, COL_NAME + 1), rng(f0, last, COL_NEXT_DATE, COL_NEXT_DATE + 1)],
+            "booleanRule": {"condition": {"type": "CUSTOM_FORMULA", "values": [{"userEnteredValue": no_step}]},
                             "format": {"backgroundColor": RED_BG,
                                        "textFormat": {"foregroundColor": RED_TEXT, "bold": True}}}}}},
         {"addConditionalFormatRule": {"index": 1, "rule": {
             "ranges": [rng(f0, last, PLAN_COL0, PLAN_COL0 + plan_w)],
             "booleanRule": {"condition": {"type": "CUSTOM_FORMULA", "values": [
-                {"userEnteredValue": f"=${plan_letter}{FIRST_ROW}=TODAY()"}]},
-                "format": {"backgroundColor": TODAY_BG}}}}},
+                {"userEnteredValue": f"=${pl}{FIRST_ROW}=TODAY()"}]}, "format": {"backgroundColor": TODAY_BG}}}}},
+        {"addConditionalFormatRule": {"index": 2, "rule": {
+            "ranges": [rng(f0, last, PLAN_COL0, PLAN_COL0 + plan_w)],
+            "booleanRule": {"condition": {"type": "CUSTOM_FORMULA", "values": [
+                {"userEnteredValue": f"=${pl}{FIRST_ROW}=TODAY()+1"}]}, "format": {"backgroundColor": TOMORROW_BG}}}}},
     ]
     for c in DATE_COLS:
         reqs.append(date_fmt(rng(f0, last, c, c + 1)))
-        reqs.append({"setDataValidation": {"range": rng(f0, last, c, c + 1), "rule": {
-            "condition": {"type": "DATE_IS_VALID"}, "inputMessage": "Выберите дату в календаре (двойной клик)",
-            "strict": True}}})
+        reqs.append(date_rule(c, "Дата прошедшего касания (календарь — двойной клик)"))
+    if service_email:   # заголовки и даты в часах правит только бот (владелец таблицы — всегда)
+        for r in (rng(0, HEADER_ROW, 0, PLAN_COL0 + plan_w), rng(f0, last, PLAN_COL0, PLAN_COL0 + 1),
+                  rng(f0, last, 0, 1)):
+            reqs.append({"addProtectedRange": {"protectedRange": {
+                "range": r, "description": "bot:заголовки", "warningOnly": False,
+                "editors": {"users": [service_email]}}}})
     return reqs

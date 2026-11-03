@@ -37,6 +37,8 @@ class Lead:
     status: str = ""
     description: str = ""
     touches: list[Touch] = field(default_factory=list)
+    next_date: date | None = None   # «Следующий шаг: дата» (новая вкладка партнёра)
+    next_what: str = ""
 
     def dates(self) -> list[date]:
         return [t.when for t in self.touches if t.when]
