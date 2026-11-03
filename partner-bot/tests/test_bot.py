@@ -273,7 +273,8 @@ def test_month_results(tmp_path):
     from bot.workbook import PartnerTab, result_cats
     assert result_cats("Стал партнёром") == set()
     assert result_cats("Оплатил 95") == {"c95"} and result_cats("Оплатил 240") == {"c240"}
-    assert result_cats("Оплатил интенсив 5000") == {"c5000"} and result_cats("Думает") == set()
+    assert result_cats("Купил продукт") == {"c5000"} and result_cats("Оплатил интенсив 5000") == {"c5000"}
+    assert result_cats("Думает") == set() and result_cats("Оплатил 95") == {"c95"}
     st = Store(str(tmp_path / "t.db"))
     tab = PartnerTab("Петрова Анна", clients=[Lead(5, "", "Котова Вера", status="Думает"),
                                               Lead(6, "", "Орлов Пётр", status="Оплатил 95")])
@@ -303,7 +304,7 @@ def test_month_block_parsed():
     assert tab.goals == {"leads": 3, "c95": 5, "c240": 2, "c5000": 4}
     assert tab.results == {"leads": 1, "c95": 2, "c240": 0, "c5000": 1}
     s = next(x for x in compute_network([tab], TODAY))
-    assert ("🎯 Месяц (факт/цель): новых контактов 1/3 · партнёры 95 2/5 · партнёры 240 0/2 · интенсив 1/4"
+    assert ("🎯 Месяц (факт/цель): новых контактов 1/3 · партнёры 95 2/5 · партнёры 240 0/2 · продукты 1/4"
             in render_partner_status(s, TODAY))
     from bot.workbook import new_leads_in_month
     assert new_leads_in_month(tab, TODAY) == 5     # клиенты Анны с первым касанием в ноябре
