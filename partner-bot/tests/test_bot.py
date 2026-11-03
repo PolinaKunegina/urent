@@ -50,6 +50,7 @@ def network_xlsx():
         {"name": "Гусев Семён", "status": "Отказ"},
         {"name": "Соколова Ия", "touches": [{"n": 1, "date": d(-3)}, {"n": 2, "date": d(1)}]},  # старый способ
         {"name": "Белых Ян", "next_date": d(-1), "next_what": "созвон"},                     # просрочен
+        {"name": "Сегодня Тест", "next_date": d(0), "next_what": "пригласить на кинотренинг"},
     ], days=[(TODAY - timedelta(days=1), [2, 1, 0], [1.5, 1, 0], (3, 2, None)),
              (TODAY - timedelta(days=2), [1, 1, 1], [1, 2, 1]),
              (TODAY, [None, None, None], [1, 0, 0]),
@@ -84,7 +85,9 @@ def test_parse_partner_tabs():
 
 def test_compute_partner():
     s = stats()["Петрова Анна"]
-    assert [l.name for l in s.active] == ["Котова Вера", "Лисина Ада", "Жуков Илья", "Соколова Ия", "Белых Ян"]
+    assert [l.name for l in s.active] == ["Котова Вера", "Лисина Ада", "Жуков Илья", "Соколова Ия", "Белых Ян",
+                                          "Сегодня Тест"]
+    assert [l.name for l in s.touch_today] == ["Сегодня Тест"]
     assert [l.name for l in s.closed] == ["Ильин Олег"]
     assert [l.name for l in s.no_touch] == ["Лисина Ада", "Жуков Илья", "Белых Ян"]
     assert [l.name for l in s.touch_tomorrow] == ["Соколова Ия"]
@@ -92,7 +95,7 @@ def test_compute_partner():
     assert s.week == {"attract": 2.5, "warmup": 3, "close": 1}
     assert s.today_fact == {"attract": 1, "warmup": 0, "close": 0}
     assert s.tomorrow_plan == {"attract": 2, "warmup": 2, "close": 0}
-    assert s.activity == round(100 * (2 / 7 + 2 / 5) / 2)
+    assert s.activity == round(100 * (2 / 7 + 3 / 6) / 2)
 
 
 def test_activity_first_days_only_counts_since_start():
@@ -119,7 +122,7 @@ def test_weekly_and_summary():
     assert "на человека: привлечение 0,8 ч/чел · прогрев 1,5 ч/чел" in w
     rows = summary_rows(st)
     anna = next(r for r in rows if r[0] == "Петрова Анна")
-    assert anna[2:6] == [5, 3, 40, 2] and anna[6:9] == [2.5, 3, 1] and anna[9:12] == [3, 2, 0]
+    assert anna[2:6] == [6, 3, 50, 2] and anna[6:9] == [2.5, 3, 1] and anna[9:12] == [3, 2, 0]
 
 
 def test_evening_texts():
@@ -130,6 +133,7 @@ def test_evening_texts():
     assert "Нет касания в ближайшие 7 дней (3)" in p and "Соколова Ия" in p
     assert "Факт за сегодня: привлечение 1 · прогрев 0 · закрытие 0 ч" in p
     assert "План на завтра: привлечение 2" in p and "https://tab" in p
+    assert "Сегодня по плану:\n  • Сегодня Тест — пригласить на кинотренинг" in p
     assert needs_evening_ping(st["Петрова Анна"])
     assert "нет твоих клиентов" in render_partner_status(st["Новикова Дарья"], TODAY)
 

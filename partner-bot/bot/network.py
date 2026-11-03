@@ -226,6 +226,10 @@ def render_partner_status(s: PartnerStats, today: date, tab_url: str = "") -> st
         out.append(f"🟢 У всех клиентов есть касание в ближайшие {HORIZON} дней")
     else:
         out.append("⚪️ В таблице пока нет твоих клиентов — внеси их, пожалуйста")
+    if s.touch_today:
+        out.append("📌 Сегодня по плану:")
+        out += [f"  • {e(l.name)}" + (f" — {e(l.next_what)}" if l.next_what else "") for l in s.touch_today]
+        out.append("Если касание было — запиши его в историю (дата и формат) и поставь новый следующий шаг.")
     if s.touch_tomorrow:
         out.append("➡️ Касания завтра: " + ", ".join(e(l.name) for l in s.touch_tomorrow))
     out.append("⏱ Факт за сегодня: " + (_hours_line(s.today_fact) + " ч" if s.today_fact else "не заполнен"))
@@ -236,7 +240,7 @@ def render_partner_status(s: PartnerStats, today: date, tab_url: str = "") -> st
 
 
 def needs_evening_ping(s: PartnerStats) -> bool:
-    return bool(s.no_touch) or not s.today_fact or not s.tomorrow_plan or not s.active
+    return bool(s.no_touch or s.touch_today) or not s.today_fact or not s.tomorrow_plan or not s.active
 
 
 # ---------- строки для листа «Сводка» ----------
