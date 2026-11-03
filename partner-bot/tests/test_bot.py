@@ -273,7 +273,7 @@ def test_month_results(tmp_path):
     from bot.workbook import PartnerTab, result_cats
     assert result_cats("Стал партнёром") == set()
     assert result_cats("Оплатил 95") == {"c95"} and result_cats("Оплатил 240") == {"c240"}
-    assert result_cats("Купил продукт") == {"c5000"} and result_cats("Оплатил интенсив 5000") == {"c5000"}
+    assert result_cats("Купил маленький продукт (не оргвзнос)") == {"c5000"} and result_cats("Оплатил интенсив 5000") == {"c5000"}
     assert result_cats("Думает") == set() and result_cats("Оплатил 95") == {"c95"}
     st = Store(str(tmp_path / "t.db"))
     tab = PartnerTab("Петрова Анна", clients=[Lead(5, "", "Котова Вера", status="Думает"),
