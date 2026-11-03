@@ -365,3 +365,22 @@ def add_month_block(sh: Sheet, tab, gid: int, today: date) -> None:
                         "range": part, "description": "bot:заголовки", "warningOnly": False,
                         "editors": pr.get("editors", {})}}})
     sh.batch(reqs)
+
+
+def rewrite_guide(sh: Sheet, sandbox: bool = False) -> int:
+    """Обновляет текст «Инструкции» на месте: лист не пересоздаётся, ссылки на него живы."""
+    tabs = sh.tabs()
+    if GUIDE_TAB not in tabs:
+        ensure_toc_tab(sh, tabs)
+        gid = sh.add_tab(GUIDE_TAB, index=1, rows=len(GUIDE) + 5, cols=2)
+    else:
+        gid = tabs[GUIDE_TAB]
+        sh.batch([{"updateSheetProperties": {"properties": {"sheetId": gid, "gridProperties": {
+            "rowCount": len(GUIDE) + 5, "columnCount": 2}}, "fields": "gridProperties(rowCount,columnCount)"}}])
+        sh.clear(f"'{GUIDE_TAB}'!A1:B{len(GUIDE) + 5}")
+    sh.put(f"'{GUIDE_TAB}'!A1", guide_values(sandbox), raw=True)
+    reqs = guide_requests(gid)
+    if TOC in sh.tabs():
+        reqs.append(link_cell(gid, 0, 1, [("← Оглавление", f"#gid={sh.tabs()[TOC]}")]))
+    sh.batch(reqs)
+    return gid

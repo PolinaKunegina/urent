@@ -492,12 +492,17 @@ def _track_results(cfg: Config, store: Store, net) -> None:
         write_month(Sheet(session, b.sheet_id), store, b.sheet_id, b.tabs, net.today)
 
 
-async def job_sync(ctx: ContextTypes.DEFAULT_TYPE) -> None:
-    net = await _network(ctx)
+async def job_results(ctx: ContextTypes.DEFAULT_TYPE) -> None:
+    """Каждые 5 минут: смена статусов → результаты месяца в блоке «Мой месяц»."""
+    net = await _network(ctx, with_gids=False)
     try:
         await asyncio.to_thread(_track_results, _cfg(ctx), _store(ctx), net)
     except Exception:
         log.exception("Не удалось посчитать результаты месяца")
+
+
+async def job_sync(ctx: ContextTypes.DEFAULT_TYPE) -> None:
+    net = await _network(ctx)
     for w in await asyncio.to_thread(sync, _cfg(ctx), net):
         log.warning(w)
 
@@ -535,6 +540,7 @@ def main() -> None:
     if cfg.reminder_time:
         jq.run_daily(job_evening, time=cfg.reminder_time.replace(tzinfo=cfg.tz), name="evening")
     jq.run_repeating(job_sync, interval=3600, first=30, name="sync")
+    jq.run_repeating(job_results, interval=300, first=60, name="results")
 
     log.info("Бот запущен: сводка в %s, напоминание в %s, руководители %s",
              cfg.report_time, cfg.reminder_time, cfg.managers)
