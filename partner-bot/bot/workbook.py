@@ -184,6 +184,7 @@ PLAN_BG = {"red": 0.89, "green": 0.94, "blue": 0.99}
 RED_BG = {"red": 0.957, "green": 0.8, "blue": 0.8}
 RED_TEXT = {"red": 0.6, "green": 0.0, "blue": 0.0}
 TODAY_BG = {"red": 0.85, "green": 0.93, "blue": 0.83}
+LINK_BLUE = {"red": 0.07, "green": 0.33, "blue": 0.8}
 TOMORROW_BG = {"red": 0.85, "green": 0.92, "blue": 0.98}
 NEXT_BG = {"red": 0.99, "green": 0.85, "blue": 0.7}
 
@@ -303,6 +304,9 @@ def partner_tab_format_requests(sheet_id: int, sep: str = ";", service_email: st
             "fields": "gridProperties.frozenRowCount,gridProperties.frozenColumnCount"}},
         {"repeatCell": {"range": rng(0, 1, 0, PLAN_COL0 + plan_w), "cell": {"userEnteredFormat": {
             "textFormat": {"bold": True, "fontSize": 13}}}, "fields": "userEnteredFormat.textFormat"}},
+        *[{"repeatCell": {"range": rng(0, 1, c, c + 1), "cell": {"userEnteredFormat": {"textFormat": {
+            "foregroundColor": LINK_BLUE, "underline": True, "bold": True, "fontSize": 12}}},
+            "fields": "userEnteredFormat.textFormat"}} for c in (COL_NEXT_DATE, PLAN_COL0 + 3)],
         fill(rng(h0, HEADER_ROW, 0, crm_w), HEAD_BG, bold=True, wrap=True),
         fill(rng(h0, HEADER_ROW, COL_NEXT_DATE, COL_NEXT_WHAT + 1), NEXT_BG, bold=True, wrap=True),
         fill(rng(h0, HEADER_ROW, PLAN_COL0, PLAN_COL0 + plan_w), PLAN_BG, bold=True, wrap=True),
