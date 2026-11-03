@@ -123,5 +123,15 @@ def guide_requests(sheet_id: int) -> list[dict]:
     return reqs
 
 
-def guide_values() -> list[list[str]]:
-    return [[("•  " + text) if style == "li" else text] for style, text in GUIDE]
+SANDBOX_WHO = ("Это песочница для новых партнёров: здесь только новички, ваших клиентов видите вы "
+               "и кураторы сети. Через две недели вы переедете в общую таблицу партнёров — "
+               "вместе со всеми своими клиентами и часами, ничего переносить вручную не нужно.")
+
+
+def guide_values(sandbox: bool = False) -> list[list[str]]:
+    rows = []
+    for style, text in GUIDE:
+        if sandbox and text.startswith("Таблицу видят все партнёры сети"):
+            text = SANDBOX_WHO
+        rows.append([("•  " + text) if style == "li" else text])
+    return rows

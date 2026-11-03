@@ -165,7 +165,7 @@ def ensure_structure(session, spreadsheet_id: str, directory: Directory, today: 
         created.append(p.name)
     if GUIDE_TAB not in tabs:
         gid = sh.add_tab(GUIDE_TAB, index=1, rows=len(GUIDE) + 5, cols=2)
-        sh.put(f"'{GUIDE_TAB}'!A1", guide_values(), raw=True)
+        sh.put(f"'{GUIDE_TAB}'!A1", guide_values(sandbox), raw=True)
         sh.batch(guide_requests(gid))
         tabs[GUIDE_TAB] = gid
     if created or force_toc or TOC not in tabs:
