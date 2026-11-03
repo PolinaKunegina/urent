@@ -1,8 +1,7 @@
-"""Сборка сводок. Можно запустить без Телеграма, чтобы проверить доступ к таблице:
+"""Загрузка сети из таблиц (основная + песочница новичков) и сборка отчётов.
 
-    python -m bot.report                    # таблица из SHEET_ID, вывод в консоль
-    python -m bot.report --file x.xlsx      # локальный файл
-    python -m bot.report --date 2026-11-03 --weekly --evening
+Без Телеграма, чтобы проверить таблицу:
+    python -m bot.report [--date 2026-11-04] [--file сеть.xlsx]
 """
 from __future__ import annotations
 
@@ -10,142 +9,106 @@ import argparse
 import logging
 import re
 from dataclasses import dataclass, field
-from datetime import date, datetime, timedelta
+from datetime import date, datetime
 
-from .analytics import (FunnelStats, compute, not_reported, render_hours, render_morning,
-                        render_partner_evening, render_weekly)
 from .config import Config, load_config
-from .gwrite import SheetsWriter
-from .hashtags import PROCESSES, Store
-from .partners import UNKNOWN, Directory
-from .sheets import (GSHEET_MIME, PARTNERS_TAB, Funnel, fetch_xlsx, google_session, parse_funnel,
-                     parse_partners)
+from .network import (PartnerStats, compute_network, render_morning, render_weekly,
+                      summary_rows)
+from .partners import Directory
+from .setup_sheet import Sheet, ensure_structure, write_summary
+from .sheets import fetch_xlsx, google_session, parse_partners
+from .workbook import parse_partner_tabs
 
 log = logging.getLogger(__name__)
 
 
+def sheet_url(sheet_id: str, gid: int | None = None) -> str:
+    return f"https://docs.google.com/spreadsheets/d/{sheet_id}/edit" + (f"#gid={gid}" if gid is not None else "")
+
+
 @dataclass
-class Snapshot:
-    funnel: Funnel | None
-    stats: FunnelStats | None
+class Book:
+    sheet_id: str
+    sandbox: bool
     directory: Directory
-    is_gsheet: bool = False
+    gids: dict[str, int] = field(default_factory=dict)
+
+
+@dataclass
+class Network:
+    today: date
+    stats: list[PartnerStats] = field(default_factory=list)
+    books: list[Book] = field(default_factory=list)
     errors: list[str] = field(default_factory=list)
-    partners_tab: bool = False   # есть ли в таблице лист «Партнёры»
 
-    def expected_partners(self) -> list[str]:
-        if self.directory.partners:
-            return self.directory.names()
-        if self.stats:
-            return [p for p in self.stats.partners if p != UNKNOWN]
-        return []
+    @property
+    def directory(self) -> Directory:
+        return Directory([p for b in self.books for p in b.directory.partners])
 
+    def tab_url(self, partner: str) -> str:
+        for b in self.books:
+            if partner in b.gids:
+                return sheet_url(b.sheet_id, b.gids[partner])
+        return ""
 
-def load_snapshot(cfg: Config, today: date, local_xlsx: bytes | None = None,
-                  session=None) -> Snapshot:
-    directory = Directory.load(cfg.partners_file)
-    partners_tab = False
-    try:
-        if local_xlsx is not None:
-            data, mime = local_xlsx, "local"
-        else:
-            if not cfg.sheet_id:
-                raise ValueError("не задан SHEET_ID")
-            data, mime = fetch_xlsx(cfg.sheet_id, cfg.service_account_file, session)
-        funnel = parse_funnel(data, cfg.sheet_tab)
-        records = parse_partners(data)
-        if records is not None:  # лист «Партнёры» главнее файла
-            directory, partners_tab = Directory.from_records(records), True
-        stats = compute(funnel.leads, today, cfg.exclude_status_regex, directory,
-                        cfg.closed_status_regex)
-        return Snapshot(funnel, stats, directory, is_gsheet=(mime == GSHEET_MIME),
-                        partners_tab=partners_tab)
-    except Exception as exc:
-        log.exception("Не удалось прочитать таблицу")
-        return Snapshot(None, None, directory,
-                        errors=[f"Не удалось прочитать таблицу: {exc.__class__.__name__}: {exc}"])
+    def main_url(self) -> str:
+        main = next((b for b in self.books if not b.sandbox), None)
+        return sheet_url(main.sheet_id) if main else ""
 
 
-def write_back(cfg: Config, snap: Snapshot, store: Store | None, session=None) -> str | None:
-    """Подсветка «нет плана» и лист с часами. Возвращает предупреждение или None."""
-    if not cfg.write_back or snap.funnel is None:
-        return None
-    if not snap.is_gsheet:
-        return ("Подсветка и лист с часами выключены: таблица загружена как .xlsx. "
-                "Нужно сохранить её как Google Таблицу.")
-    try:
-        writer = SheetsWriter(session or google_session(cfg.service_account_file), cfg.sheet_id)
-        writer.mark_plan(snap.funnel, snap.stats.plan, cfg.helper_header)
-        if not snap.partners_tab:
-            writer.create_partners_tab(PARTNERS_TAB, distinct_sources(snap.funnel))
-        if store is not None:
-            rows = [[d, p, "план" if k == "plan" else "факт", PROCESSES[pr][0], h,
-                     ppl if ppl is not None else "", note or "", f"@{u}" if u else ""]
-                    for d, p, pr, h, note, u, k, ppl in store.all_entries()]
-            writer.write_hours(cfg.hours_tab, rows)
-    except Exception as exc:
-        log.exception("Не удалось записать в таблицу")
-        code = getattr(getattr(exc, "response", None), "status_code", None)
-        if code == 403:
-            return "Бот не может писать в таблицу: дай сервисному аккаунту доступ «Редактор»."
-        return f"Не удалось обновить подсветку/часы в таблице: {exc.__class__.__name__}"
-    return None
-
-
-def distinct_sources(funnel: Funnel) -> list[str]:
-    """Варианты из колонки «Источник» для первичного заполнения листа «Партнёры»."""
-    d, seen = Directory([]), []
-    for l in funnel.leads:
-        name, _ = d.resolve(l.source)
-        if name != UNKNOWN and name not in seen:
-            seen.append(name)
-    return sorted(seen, key=str.lower)
-
-
-def morning_report(cfg: Config, snap: Snapshot, store: Store | None, today: date,
-                   warning: str | None = None) -> str:
-    hours_block = None
-    if store is not None:
-        y = today - timedelta(days=1)
-        hours_block = render_hours(store.summary(y, y), store.summary(today - timedelta(days=7), y),
-                                   snap.expected_partners(), y, plan_data=store.summary(y, y, "plan"))
-    errors = list(snap.errors) + ([warning] if warning else [])
-    if snap.stats is None:
-        return "📊 Сводка не собрана.\n" + "\n".join(f"❗️ {x}" for x in errors)
-    return render_morning(snap.stats, hours_block, errors)
-
-
-def weekly_report(snap: Snapshot, store: Store | None, today: date) -> str | None:
-    if snap.stats is None or snap.funnel is None:
-        return None
-    start, end = today - timedelta(days=7), today - timedelta(days=1)
-    hours = store.summary(start, end) if store else {}
-    return render_weekly(snap.funnel.leads, snap.stats, hours, start, end)
-
-
-def evening_chat_text(snap: Snapshot, store: Store | None, today: date) -> str:
-    text = ("Коллеги, напоминание 🌿 До 19:00 напишите <b>факт за день</b> в эту тему: "
-            "часы на знакомство, прогрев и сделки, и по каждому клиенту — что происходит "
-            "и <b>когда следующее касание</b>. Таблицу заполню сама. Пример — /template.")
-    if store is not None:
-        silent = not_reported(snap.expected_partners(), store.summary(today, today))
-        if silent:
-            text += "\n\n🔕 Сегодня ещё нет факта от: " + ", ".join(silent)
-    return text
-
-
-def evening_partner_texts(snap: Snapshot, today: date) -> dict[str, str]:
-    """{имя партнёра: текст в личку}."""
-    if snap.stats is None:
-        return {}
-    out = {}
-    for name, p in snap.stats.partners.items():
-        if name == UNKNOWN:
+def load_network(cfg: Config, today: date, session=None, local_xlsx: bytes | None = None,
+                 with_gids: bool = True) -> Network:
+    net = Network(today)
+    sources = [(cfg.sheet_id, False), (cfg.sandbox_id, True)]
+    tabs = []
+    for sid, sandbox in sources:
+        if not sid and not (local_xlsx and not sandbox):
             continue
-        t = render_partner_evening(p, today)
-        if t:
-            out[name] = t
-    return out
+        try:
+            if local_xlsx is not None and not sandbox:
+                data = local_xlsx
+            else:
+                session = session or google_session(cfg.service_account_file)
+                data, _ = fetch_xlsx(sid, cfg.service_account_file, session)
+            book = Book(sid, sandbox, Directory.from_records(parse_partners(data) or []))
+            if with_gids and session is not None and sid:
+                book.gids = Sheet(session, sid).tabs()
+            net.books.append(book)
+            tabs += parse_partner_tabs(data, sandbox=sandbox)
+        except Exception as exc:
+            log.exception("Не удалось прочитать таблицу %s", sid)
+            what = "песочницу" if sandbox else "основную таблицу"
+            net.errors.append(f"Не удалось прочитать {what}: {exc.__class__.__name__}: {exc}")
+    net.stats = compute_network(tabs, today)
+    return net
+
+
+def sync(cfg: Config, net: Network, session=None) -> list[str]:
+    """Создаёт вкладки новым партнёрам и обновляет «Сводку». Возвращает предупреждения."""
+    warnings = []
+    session = session or google_session(cfg.service_account_file)
+    stamp = datetime.now(cfg.tz).strftime("%d.%m.%Y %H:%M")
+    for b in net.books:
+        try:
+            created = ensure_structure(session, b.sheet_id, b.directory, net.today, sandbox=b.sandbox)
+            if created:
+                log.info("Новые вкладки: %s", created)
+            mine = [s for s in net.stats if s.sandbox == b.sandbox]
+            write_summary(session, b.sheet_id, summary_rows(mine), stamp)
+        except Exception as exc:
+            log.exception("Не удалось обновить таблицу %s", b.sheet_id)
+            code = getattr(getattr(exc, "response", None), "status_code", None)
+            warnings.append("Боту нужен доступ «Редактор» к таблице." if code == 403
+                            else f"Не удалось обновить таблицу: {exc.__class__.__name__}")
+    return warnings
+
+
+def morning_text(net: Network) -> str:
+    return render_morning(net.stats, net.today, net.main_url(), net.errors)
+
+
+def weekly_text(net: Network) -> str:
+    return render_weekly(net.stats, net.today)
 
 
 def _strip_html(text: str) -> str:
@@ -154,26 +117,16 @@ def _strip_html(text: str) -> str:
 
 def main() -> None:
     p = argparse.ArgumentParser()
-    p.add_argument("--file", help="локальный xlsx вместо таблицы на Drive")
-    p.add_argument("--date", help="дата отчёта YYYY-MM-DD, по умолчанию сегодня")
-    p.add_argument("--weekly", action="store_true", help="показать и недельную сводку")
-    p.add_argument("--evening", action="store_true", help="показать вечерние сообщения партнёрам")
-    p.add_argument("--html", action="store_true", help="не убирать HTML-разметку")
+    p.add_argument("--file")
+    p.add_argument("--date")
     args = p.parse_args()
-
     cfg = load_config()
     today = date.fromisoformat(args.date) if args.date else datetime.now(cfg.tz).date()
     local = open(args.file, "rb").read() if args.file else None
-    snap = load_snapshot(cfg, today, local)
-    texts = [morning_report(cfg, snap, None, today)]
-    if args.weekly:
-        texts.append(weekly_report(snap, None, today) or "")
-    if args.evening:
-        texts.append(evening_chat_text(snap, None, today))
-        texts += [f"[{k}]\n{v}" for k, v in evening_partner_texts(snap, today).items()]
-    out = "\n\n" + "─" * 30 + "\n\n"
-    joined = out.join(texts)
-    print(joined if args.html else _strip_html(joined))
+    net = load_network(cfg, today, local_xlsx=local, with_gids=not local)
+    print(_strip_html(morning_text(net)))
+    if today.weekday() == 0:
+        print("\n" + _strip_html(weekly_text(net)))
 
 
 if __name__ == "__main__":

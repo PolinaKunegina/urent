@@ -12,7 +12,8 @@ from zoneinfo import ZoneInfo
 class Config:
     bot_token: str = ""
     service_account_file: str = "secrets/service-account.json"
-    sheet_id: str = ""                       # общая таблица воронки на Google Drive
+    sheet_id: str = ""                       # основная таблица сети на Google Drive
+    sandbox_id: str = ""                     # песочница новых партнёров (можно задать /setsandbox)
     sheet_tab: str = "Воронка лидов"
     managers: list[str] = field(default_factory=list)   # @username или числовые id
     partners_file: str = "data/partners.json"
@@ -61,6 +62,7 @@ def load_config() -> Config:
         bot_token=env("TELEGRAM_BOT_TOKEN", ""),
         service_account_file=env("GOOGLE_SERVICE_ACCOUNT_FILE", "secrets/service-account.json"),
         sheet_id=env("SHEET_ID", "").strip(),
+        sandbox_id=env("SANDBOX_SHEET_ID", "").strip(),
         sheet_tab=env("SHEET_TAB", "Воронка лидов"),
         managers=parse_managers(env("MANAGERS", "")),
         partners_file=env("PARTNERS_FILE", "data/partners.json"),
