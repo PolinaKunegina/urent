@@ -480,8 +480,24 @@ async def job_evening(ctx: ContextTypes.DEFAULT_TYPE) -> None:
             log.exception("Не удалось написать партнёру %s", s.name)
 
 
+def _track_results(cfg: Config, store: Store, net) -> None:
+    from .results import track, write_month
+    from .setup_sheet import Sheet
+    from .sheets import google_session
+    session = google_session(cfg.service_account_file)
+    for b in net.books:
+        new = track(store, b.sheet_id, b.tabs, net.today)
+        if new:
+            log.info("Новые результаты: %s", new)
+        write_month(Sheet(session, b.sheet_id), store, b.sheet_id, b.tabs, net.today)
+
+
 async def job_sync(ctx: ContextTypes.DEFAULT_TYPE) -> None:
     net = await _network(ctx)
+    try:
+        await asyncio.to_thread(_track_results, _cfg(ctx), _store(ctx), net)
+    except Exception:
+        log.exception("Не удалось посчитать результаты месяца")
     for w in await asyncio.to_thread(sync, _cfg(ctx), net):
         log.warning(w)
 

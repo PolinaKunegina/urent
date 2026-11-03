@@ -52,10 +52,28 @@ PROCESS_NAMES = {"attract": "привлечение", "warmup": "прогрев"
 
 STATUSES = [
     "Новый контакт", "Был на встрече", "Назначено касание", "Думает", "Диагностика",
-    "Оплатил вход 5000", "Оплатил пакет 240 / стал ментором", "Пауза", "Отказ",
+    "Оплатил интенсив 5000", "Оплатил 95", "Оплатил 240", "Стал партнёром",
+    "Коллаборация / эксперт", "Пауза", "Отказ",
 ]
-EXCLUDED_RE = r"отказ"                                   # не в работе
-CLOSED_RE = r"стал ментором|оплатил пакет|240"           # сделка закрыта, касание не нужно
+EXCLUDED_RE = r"отказ"                                                  # не в работе
+CLOSED_RE = r"оплатил 240|стал партн|стал ментор|коллаборац|оплатил пакет"  # шаг не нужен, не красный
+
+# Блок «Мой месяц» (строки 1–3): цели вписывает партнёр, результаты считает бот по смене статусов
+RESULT_CATS = [   # (ключ, подпись, по какому статусу засчитывается)
+    ("partners", "Новые партнёры", r"стал партн|стал ментор"),
+    ("c95", "Клиенты 95", r"(?<!\d)95(?!\d)"),
+    ("c240", "Клиенты 240", r"(?<!\d)240(?!\d)"),
+    ("c5000", "Интенсив 5000", r"5000|интенсив"),
+]
+MONTH_COL = 5                  # F: подписи блока; G..J — категории; K — % выполнения
+MONTHS_NOM = ["январь", "февраль", "март", "апрель", "май", "июнь", "июль", "август", "сентябрь",
+              "октябрь", "ноябрь", "декабрь"]
+
+
+def result_cats(status: str) -> set[str]:
+    st = (status or "").lower()
+    return {k for k, _, rx in RESULT_CATS if re.search(rx, st)}
+
 
 SERVICE_TABS = {"Оглавление", "Сводка", "Партнёры", "Инструкция"}
 
@@ -85,6 +103,9 @@ class PartnerTab:
     days: dict[date, DayPlan] = field(default_factory=dict)
     sandbox: bool = False
     touch_cols: list = field(default_factory=list)   # фактические колонки истории [(n, дата, формат)]
+    goals: dict = field(default_factory=dict)        # категория -> цель месяца (вписывает партнёр)
+    results: dict = field(default_factory=dict)      # категория -> результат месяца (пишет бот)
+    month_col: int | None = None                     # колонка подписи «Мой месяц»
     plan_col: int | None = None                      # колонка «Дата» блока часов
 
     def history_full_soon(self) -> bool:
@@ -126,11 +147,29 @@ def parse_partner_tabs(xlsx: bytes, sandbox: bool = False) -> list[PartnerTab]:
             header_row = _is_partner_tab(ws)
             if header_row is None:
                 continue
-            rows = list(ws.iter_rows(min_row=header_row, values_only=True))
-            out.append(_parse_rows(title, rows, sandbox))
+            rows = list(ws.iter_rows(min_row=1, values_only=True))
+            tab = _parse_rows(title, rows[header_row - 1:], sandbox)
+            _parse_month(tab, rows[:header_row - 1])
+            out.append(tab)
     finally:
         wb.close()
     return out
+
+
+def _parse_month(tab: PartnerTab, top: list[tuple]) -> None:
+    """Блок «Мой месяц»: подпись в строке 1, цели строкой ниже, результаты ещё ниже."""
+    for r, row in enumerate(top):
+        for c, v in enumerate(row):
+            if _norm(v).startswith("мой месяц"):
+                tab.month_col = c
+                for k, (key, _, _) in enumerate(RESULT_CATS):
+                    get = lambda rr: top[rr][c + 1 + k] if rr < len(top) and c + 1 + k < len(top[rr]) else None
+                    g, res = _num(get(r + 1)), _num(get(r + 2))
+                    if g is not None:
+                        tab.goals[key] = g
+                    if res is not None:
+                        tab.results[key] = res
+                return
 
 
 def _parse_rows(title: str, rows: list[tuple], sandbox: bool) -> PartnerTab:
@@ -204,6 +243,7 @@ PLAN_BG = {"red": 0.89, "green": 0.94, "blue": 0.99}
 RED_BG = {"red": 0.957, "green": 0.8, "blue": 0.8}
 RED_TEXT = {"red": 0.6, "green": 0.0, "blue": 0.0}
 TODAY_BG = {"red": 0.85, "green": 0.93, "blue": 0.83}
+MONTH_BG = {"red": 0.99, "green": 0.95, "blue": 0.8}
 FACT_BG = {"red": 0.85, "green": 0.94, "blue": 0.83}
 PEOPLE_BG = {"red": 0.93, "green": 0.89, "blue": 0.98}
 LINK_BLUE = {"red": 0.07, "green": 0.33, "blue": 0.8}
@@ -267,6 +307,48 @@ def partner_links(gid: int, plan_col: int, toc_gid: int | None, guide_gid: int |
     return reqs
 
 
+def month_block_values(today: date, sep: str = ";") -> list[list]:
+    m = MONTHS_NOM[today.month - 1]
+    goal_l, goal_r = col_letter(MONTH_COL + 1), col_letter(MONTH_COL + len(RESULT_CATS))
+    pct = fx(f'=IF(SUM({goal_l}2:{goal_r}2)=0,"",SUM({goal_l}3:{goal_r}3)/SUM({goal_l}2:{goal_r}2))', sep)
+    return [[f"Мой месяц: {m}", *[t for _, t, _ in RESULT_CATS], "Выполнено"],
+            ["Цель (впишите)", *[""] * len(RESULT_CATS), ""],
+            ["Результат (сам)", *[0] * len(RESULT_CATS), pct]]
+
+
+def month_block_requests(sheet_id: int) -> list[dict]:
+    n = len(RESULT_CATS)
+
+    def rng(r0, r1, c0, c1):
+        return {"sheetId": sheet_id, "startRowIndex": r0, "endRowIndex": r1,
+                "startColumnIndex": c0, "endColumnIndex": c1}
+
+    def cell(r, fmt, fields):
+        return {"repeatCell": {"range": r, "cell": {"userEnteredFormat": fmt}, "fields": fields}}
+    return [
+        cell(rng(0, 3, MONTH_COL, MONTH_COL + 1), {"textFormat": {"bold": True, "fontSize": 10},
+                                                     "backgroundColor": MONTH_BG},
+             "userEnteredFormat(textFormat,backgroundColor)"),
+        cell(rng(0, 1, MONTH_COL + 1, MONTH_COL + n + 2), {"textFormat": {"bold": True, "fontSize": 9},
+                                                             "backgroundColor": MONTH_BG,
+                                                             "horizontalAlignment": "CENTER"},
+             "userEnteredFormat(textFormat,backgroundColor,horizontalAlignment)"),
+        cell(rng(1, 2, MONTH_COL + 1, MONTH_COL + n + 1), {"backgroundColor": YELLOW, "horizontalAlignment": "CENTER",
+                                                             "textFormat": {"bold": True, "fontSize": 11}},
+             "userEnteredFormat(backgroundColor,horizontalAlignment,textFormat)"),
+        cell(rng(2, 3, MONTH_COL + 1, MONTH_COL + n + 1), {"backgroundColor": FACT_BG, "horizontalAlignment": "CENTER",
+                                                             "textFormat": {"bold": True, "fontSize": 11}},
+             "userEnteredFormat(backgroundColor,horizontalAlignment,textFormat)"),
+        cell(rng(2, 3, MONTH_COL + n + 1, MONTH_COL + n + 2), {"numberFormat": {"type": "PERCENT", "pattern": "0%"},
+                                                                 "horizontalAlignment": "CENTER",
+                                                                 "textFormat": {"bold": True, "fontSize": 11}},
+             "userEnteredFormat(numberFormat,horizontalAlignment,textFormat)"),
+        {"setDataValidation": {"range": rng(1, 2, MONTH_COL + 1, MONTH_COL + n + 1), "rule": {
+            "condition": {"type": "NUMBER_GREATER_THAN_EQ", "values": [{"userEnteredValue": "0"}]},
+            "inputMessage": "Сколько хотите за месяц — числом", "strict": True}}},
+    ]
+
+
 def partner_tab_values(name: str, start: date, end: date, clients: list[dict] | None = None,
                        sep: str = ";", gid: int | None = None,
                        days: dict | None = None) -> list[list]:
@@ -274,8 +356,10 @@ def partner_tab_values(name: str, start: date, end: date, clients: list[dict] | 
     width = PLAN_COL0 + len(PLAN_HEADERS)
     grid = [["" for _ in range(width)] for _ in range(HEADER_ROW + CLIENT_ROWS)]
     grid[0][0] = f"Клиенты — {name}"
-    grid[1][0] = ("Следующий шаг — что и когда запланировано, он сам копируется в касания справа. "
-                  "Красным — клиент без шага в ближайшие 7 дней.")
+    grid[1][0] = "Следующий шаг сам попадает в историю. Красный — нет шага на 7 дней."
+    for row, cells in enumerate(month_block_values(start, sep)):
+        for k, v in enumerate(cells):
+            grid[row][MONTH_COL + k] = v
     grid[0][PLAN_COL0] = "Мои часы по дням"
     grid[1][PLAN_COL0] = ("Вечером: в зелёной строке (сегодня) — факт рядом с планом, "
                           "в голубой (завтра) — план. Ничего не стирайте: план и факт стоят рядом.")
@@ -422,7 +506,9 @@ def partner_tab_format_requests(sheet_id: int, sep: str = ";", service_email: st
     if service_email:   # заголовки и даты в часах правит только бот (владелец таблицы — всегда)
         for r in (rng(0, HEADER_ROW, 0, PLAN_COL0 + plan_w), rng(f0, last, PLAN_COL0, PLAN_COL0 + 1),
                   rng(f0, last, 0, 1), rng(f0, last, PLAN_COL0 + P_PCT, PLAN_COL0 + P_PCT + 1)):
-            reqs.append({"addProtectedRange": {"protectedRange": {
-                "range": r, "description": "bot:заголовки", "warningOnly": False,
-                "editors": {"users": [service_email]}}}})
+            pr = {"range": r, "description": "bot:заголовки", "warningOnly": False,
+                  "editors": {"users": [service_email]}}
+            if r["startRowIndex"] == 0:   # цели месяца партнёр вписывает сам
+                pr["unprotectedRanges"] = [rng(1, 2, MONTH_COL + 1, MONTH_COL + 1 + len(RESULT_CATS))]
+            reqs.append({"addProtectedRange": {"protectedRange": pr}})
     return reqs

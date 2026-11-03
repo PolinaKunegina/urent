@@ -11,7 +11,7 @@ import re
 from dataclasses import dataclass, field
 from datetime import date, timedelta
 
-from .workbook import CLOSED_RE, EXCLUDED_RE, PROCESS_NAMES, PROCESSES, PartnerTab
+from .workbook import CLOSED_RE, EXCLUDED_RE, PROCESS_NAMES, PROCESSES, RESULT_CATS, PartnerTab
 from .sheets import Lead
 
 WEEKDAYS = ["пн", "вт", "ср", "чт", "пт", "сб", "вс"]
@@ -57,6 +57,8 @@ class PartnerStats:
     yesterday_people: dict = field(default_factory=dict)
     month: dict = field(default_factory=dict)                # факт с 1-го числа по вчера
     activity: int = 0
+    goals: dict = field(default_factory=dict)       # цели месяца по категориям
+    results: dict = field(default_factory=dict)     # результаты месяца по категориям
 
     @property
     def label(self) -> str:
@@ -74,6 +76,7 @@ def _next_touch(l: Lead, today: date) -> date | None:
 def compute_partner(tab: PartnerTab, today: date) -> PartnerStats:
     ex, cl = re.compile(EXCLUDED_RE, re.I), re.compile(CLOSED_RE, re.I)
     ps = PartnerStats(tab.name, tab.sandbox)
+    ps.goals, ps.results = dict(tab.goals), dict(tab.results)
     for l in tab.clients:
         if l.status and ex.search(l.status):
             continue
@@ -122,6 +125,19 @@ def compute_partner(tab: PartnerTab, today: date) -> PartnerStats:
 def compute_network(tabs: list[PartnerTab], today: date) -> list[PartnerStats]:
     stats = [compute_partner(t, today) for t in tabs]
     return sorted(stats, key=lambda s: (s.sandbox, s.name.lower()))
+
+
+CAT_SHORT = {"partners": "партнёры", "c95": "95", "c240": "240", "c5000": "интенсив"}
+
+
+def month_line(goals: dict, results: dict) -> str:
+    """«партнёры 1/3 · 95 2/5 · 240 0/2 · интенсив 1/4»."""
+    parts = []
+    for k, _, _ in RESULT_CATS:
+        g, r = goals.get(k), results.get(k, 0)
+        if g or r:
+            parts.append(f"{CAT_SHORT[k]} {h(r)}/{h(g or 0)}")
+    return " · ".join(parts)
 
 
 def _hours_line(fact: dict, plan: dict | None = None, people: dict | None = None) -> str:
@@ -174,6 +190,12 @@ def render_morning(stats: list[PartnerStats], today: date, sheet_url: str = "",
     if silent:
         out.append(f"🔕 Не заполнили факт: {e(', '.join(silent))}")
 
+    tot_g = {k: sum(s.goals.get(k, 0) for s in stats) for k, _, _ in RESULT_CATS}
+    tot_r = {k: sum(s.results.get(k, 0) for s in stats) for k, _, _ in RESULT_CATS}
+    out += ["", f"🎯 <b>Результаты месяца</b> (факт/цель): {month_line(tot_g, tot_r) or 'пока нет ни целей, ни результатов'}"]
+    no_goals = [s.label for s in stats if not any(s.goals.values())]
+    if no_goals:
+        out.append(f"   Цели на месяц не поставили: {e(', '.join(no_goals))}")
     out += ["", f"📈 <b>Активность за {HORIZON} дней</b> (дни с фактом + клиенты с касанием)"]
     out.append(" · ".join(f"{light(s.activity)} {e(s.label)} {s.activity}%"
                           for s in sorted(stats, key=lambda s: -s.activity)))
@@ -195,6 +217,9 @@ def render_weekly(stats: list[PartnerStats], today: date) -> str:
     for s in sorted(stats, key=lambda s: -sum(s.week.values())):
         line = (f"<b>{e(s.label)}</b> — неделя: {_hours_line(s.week, people=s.week_people)}; "
                 f"месяц: {_hours_line(s.month)}; факт {s.fact_days}/{s.window} дн.")
+        ml = month_line(s.goals, s.results)
+        if ml:
+            line += f"\n   🎯 месяц: {ml}"
         eff = per_person(s.week, s.week_people)
         if eff:
             line += f"\n   на человека: {eff}"
@@ -232,6 +257,9 @@ def render_partner_status(s: PartnerStats, today: date, tab_url: str = "") -> st
         out.append("Если касание было — впиши новый следующий шаг, он сам попадёт в историю касаний.")
     if s.touch_tomorrow:
         out.append("➡️ Касания завтра: " + ", ".join(e(l.name) for l in s.touch_tomorrow))
+    ml = month_line(s.goals, s.results)
+    out.append(f"🎯 Месяц (факт/цель): {ml}" if any(s.goals.values())
+               else "🎯 Цели на этот месяц не заполнены — впиши их вверху своей вкладки, блок «Мой месяц»")
     out.append("⏱ Факт за сегодня: " + (_hours_line(s.today_fact) + " ч" if s.today_fact else "не заполнен"))
     out.append("📝 План на завтра: " + (_hours_line(s.tomorrow_plan) + " ч" if s.tomorrow_plan else "не заполнен"))
     if tab_url:
@@ -251,7 +279,8 @@ def summary_rows(stats: list[PartnerStats]) -> list[list]:
         share = round(100 * (1 - len(s.no_touch) / len(s.active))) if s.active else ""
         rows.append([s.label, s.activity, len(s.active), len(s.no_touch), share, s.fact_days,
                      *[s.week.get(p, 0) for p in PROCESSES], *[s.week_people.get(p, 0) for p in PROCESSES],
-                     *[s.month.get(p, 0) for p in PROCESSES]])
+                     *[s.month.get(p, 0) for p in PROCESSES],
+                     *[f"{h(s.results.get(k, 0))} / {h(s.goals.get(k, 0))}" for k, _, _ in RESULT_CATS]])
     return rows
 
 

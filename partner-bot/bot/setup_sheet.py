@@ -15,7 +15,8 @@ from urllib.parse import quote
 
 from .guide import GUIDE, GUIDE_TAB, guide_requests, guide_values
 from .partners import Directory
-from .workbook import (PLAN_COL0, PLAN_HEADERS, col_letter, link_cell, partner_links,
+from .workbook import (MONTH_COL, PLAN_COL0, PLAN_HEADERS, RESULT_CATS, STATUSES, col_letter, link_cell,
+                       month_block_requests, month_block_values, partner_links,
                        partner_tab_format_requests, partner_tab_values, sep_for_locale)
 
 log = logging.getLogger(__name__)
@@ -114,7 +115,7 @@ def create_partner_tab(sh: Sheet, name: str, start: date, clients: list[dict] | 
     sid = sh.add_tab(title, cols=PLAN_COL0 + len(PLAN_HEADERS) + 1)
     sh.put(f"'{title}'!A1", partner_tab_values(name, start, SPRINT_END, clients, sh.sep(), sid, days))
     sh.batch(partner_tab_format_requests(sid, sh.sep(), service_email())
-             + partner_links(sid, PLAN_COL0, nav["toc"], nav["guide"]))
+             + month_block_requests(sid) + partner_links(sid, PLAN_COL0, nav["toc"], nav["guide"]))
     log.info("Создана вкладка партнёра «%s» (%d клиентов)", name, len(clients or []))
     return sid
 
@@ -191,6 +192,8 @@ SUMMARY_HEADER = [
     "Дней с фактом (из 7)", "Привлечение 7 дн, ч", "Прогрев 7 дн, ч", "Закрытие 7 дн, ч",
     "Привлечение 7 дн, людей", "Прогрев 7 дн, людей", "Закрытие 7 дн, людей",
     "Привлечение с 1-го числа, ч", "Прогрев с 1-го числа, ч", "Закрытие с 1-го числа, ч",
+    "Новые партнёры: факт / цель", "Клиенты 95: факт / цель", "Клиенты 240: факт / цель",
+    "Интенсив 5000: факт / цель",
 ]
 
 
@@ -332,3 +335,30 @@ def expand_history(sh: Sheet, tab, gid: int, add: int = HISTORY_ADD) -> None:
                             [("→ к моим часам", f"#gid={gid}&range={col_letter(new_plan)}{HEADER_ROW}")],
                             size=12, bold=True)])
     log.info("Вкладка «%s»: добавлено %d пар касаний", tab.name, add)
+
+
+def add_month_block(sh: Sheet, tab, gid: int, today: date) -> None:
+    """Существующей вкладке: блок «Мой месяц», новый список статусов, цели открыты для правки."""
+    from .workbook import COL_STATUS, FIRST_ROW, HEADER_ROW, CLIENT_ROWS
+    sh.put(f"'{tab.name}'!{col_letter(MONTH_COL)}1", month_block_values(today, sh.sep()))
+    sh.put(f"'{tab.name}'!A2", [["Следующий шаг сам попадает в историю. Красный — нет шага на 7 дней."]], raw=True)
+    reqs = month_block_requests(gid) + [{"setDataValidation": {"range": {
+        "sheetId": gid, "startRowIndex": FIRST_ROW - 1, "endRowIndex": HEADER_ROW + CLIENT_ROWS,
+        "startColumnIndex": COL_STATUS, "endColumnIndex": COL_STATUS + 1}, "rule": {
+        "condition": {"type": "ONE_OF_LIST", "values": [{"userEnteredValue": x} for x in STATUSES]},
+        "showCustomUi": True, "strict": False}}}]
+    r = sh.s.get(f"{API}/{sh.id}", params={"fields": "sheets(properties.sheetId,protectedRanges(protectedRangeId,description,range))"},
+                 timeout=30)
+    r.raise_for_status()
+    for x in r.json().get("sheets", []):
+        if x["properties"]["sheetId"] != gid:
+            continue
+        for pr in x.get("protectedRanges", []):
+            if pr.get("description") == "bot:заголовки" and pr["range"].get("startRowIndex", 0) == 0:
+                reqs.append({"updateProtectedRange": {"protectedRange": {
+                    "protectedRangeId": pr["protectedRangeId"],
+                    "unprotectedRanges": [{"sheetId": gid, "startRowIndex": 1, "endRowIndex": 2,
+                                           "startColumnIndex": MONTH_COL + 1,
+                                           "endColumnIndex": MONTH_COL + 1 + len(RESULT_CATS)}]},
+                    "fields": "unprotectedRanges"}})
+    sh.batch(reqs)

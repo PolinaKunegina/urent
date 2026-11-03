@@ -264,3 +264,43 @@ def test_guide_tab_content():
     text = " ".join(t for _, t in GUIDE)
     assert "прообраз" in text and "Советник" in text and "красным" in text
     assert guide_values()[0][0].startswith("Ваша CRM")
+
+
+def test_month_results(tmp_path):
+    from bot.network import month_line
+    from bot.results import track
+    from bot.sheets import Lead
+    from bot.workbook import PartnerTab, result_cats
+    assert result_cats("Стал партнёром") == {"partners"}
+    assert result_cats("Оплатил 95") == {"c95"} and result_cats("Оплатил 240") == {"c240"}
+    assert result_cats("Оплатил интенсив 5000") == {"c5000"} and result_cats("Думает") == set()
+    st = Store(str(tmp_path / "t.db"))
+    tab = PartnerTab("Петрова Анна", clients=[Lead(5, "", "Котова Вера", status="Думает"),
+                                              Lead(6, "", "Орлов Пётр", status="Оплатил 95")])
+    assert track(st, "B", [tab], TODAY) == []                     # первый запуск — только запоминаем
+    tab.clients[0].status = "Оплатил 240"                         # Вера купила 240
+    tab.clients.append(Lead(7, "", "Новый Ян", status="Оплатил интенсив 5000"))   # новый сразу с оплатой
+    new = track(st, "B", [tab], TODAY)
+    assert sorted((c, k) for _, c, k, _ in new) == [("Котова Вера", "c240"), ("Новый Ян", "c5000")]
+    assert track(st, "B", [tab], TODAY) == []                     # повторно не засчитывает
+    assert st.month_results("B", TODAY.strftime("%Y-%m")) == {("Петрова Анна", "c240"): 1,
+                                                              ("Петрова Анна", "c5000"): 1}
+    assert month_line({"partners": 3, "c240": 2}, {"c240": 1}) == "партнёры 0/3 · 240 1/2"
+
+
+def test_month_block_parsed():
+    from openpyxl import load_workbook
+    wb = load_workbook(io.BytesIO(network_xlsx()))
+    ws = wb["Петрова Анна"]
+    assert ws.cell(row=1, column=6).value.startswith("Мой месяц")
+    for k, v in enumerate([3, 5, 2, 4]):
+        ws.cell(row=2, column=7 + k, value=v)
+    for k, v in enumerate([1, 2, 0, 1]):
+        ws.cell(row=3, column=7 + k, value=v)
+    buf = io.BytesIO()
+    wb.save(buf)
+    tab = next(t for t in parse_partner_tabs(buf.getvalue()) if t.name == "Петрова Анна")
+    assert tab.goals == {"partners": 3, "c95": 5, "c240": 2, "c5000": 4}
+    assert tab.results == {"partners": 1, "c95": 2, "c240": 0, "c5000": 1}
+    s = next(x for x in compute_network([tab], TODAY))
+    assert "🎯 Месяц (факт/цель): партнёры 1/3 · 95 2/5 · 240 0/2 · интенсив 1/4" in render_partner_status(s, TODAY)

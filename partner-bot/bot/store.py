@@ -11,6 +11,15 @@ CREATE TABLE IF NOT EXISTS users (
     full_name TEXT,
     private_ok INTEGER DEFAULT 0   -- написал боту /start, значит можно писать в личку
 );
+CREATE TABLE IF NOT EXISTS status_seen (   -- последний виденный статус клиента
+    book TEXT, tab TEXT, client TEXT, status TEXT, PRIMARY KEY (book, tab, client)
+);
+CREATE TABLE IF NOT EXISTS results (       -- засчитанные результаты (смена статуса)
+    book TEXT, tab TEXT, client TEXT, cat TEXT, day TEXT
+);
+CREATE TABLE IF NOT EXISTS goals_archive ( -- цели и результаты прошлых месяцев
+    book TEXT, tab TEXT, month TEXT, cat TEXT, goal REAL, result REAL
+);
 CREATE TABLE IF NOT EXISTS settings (
     key TEXT PRIMARY KEY,
     value TEXT
@@ -47,3 +56,29 @@ class Store:
         with self.db:
             self.db.execute("INSERT INTO settings(key, value) VALUES (?, ?)"
                             " ON CONFLICT(key) DO UPDATE SET value=excluded.value", (key, value))
+
+    # ---------- результаты месяца ----------
+
+    def seen_statuses(self, book: str) -> dict[tuple[str, str], str]:
+        rows = self.db.execute("SELECT tab, client, status FROM status_seen WHERE book=?", (book,)).fetchall()
+        return {(t, c): st for t, c, st in rows}
+
+    def save_statuses(self, book: str, seen: dict[tuple[str, str], str]) -> None:
+        with self.db:
+            self.db.execute("DELETE FROM status_seen WHERE book=?", (book,))
+            self.db.executemany("INSERT INTO status_seen VALUES (?,?,?,?)",
+                                [(book, t, c, st) for (t, c), st in seen.items()])
+
+    def add_results(self, book: str, items: list[tuple[str, str, str, str]]) -> None:
+        with self.db:
+            self.db.executemany("INSERT INTO results VALUES (?,?,?,?,?)", [(book, *x) for x in items])
+
+    def month_results(self, book: str, month: str) -> dict[tuple[str, str], int]:
+        rows = self.db.execute("SELECT tab, cat, COUNT(*) FROM results WHERE book=? AND day LIKE ? "
+                               "GROUP BY tab, cat", (book, f"{month}%")).fetchall()
+        return {(t, c): n for t, c, n in rows}
+
+    def archive_goals(self, book: str, month: str, rows: list[tuple[str, str, float, float]]) -> None:
+        with self.db:
+            self.db.executemany("INSERT INTO goals_archive VALUES (?,?,?,?,?,?)",
+                                [(book, t, month, c, g, r) for t, c, g, r in rows])
