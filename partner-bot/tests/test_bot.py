@@ -255,3 +255,35 @@ def test_guide_tab_content():
     text = " ".join(t for _, t in GUIDE)
     assert "прообраз" in text and "Советник" in text and "красным" in text
     assert guide_values()[0][0].startswith("Ваша CRM")
+
+
+def test_archive_moves_past_step_into_history():
+    from bot.archive import plan_moves
+    from bot.sheets import Lead, Touch
+    from bot.workbook import PartnerTab
+    T = TODAY
+    tab = PartnerTab("Петрова Анна", clients=[
+        Lead(5, "", "Котова Вера", touches=[Touch(1, T - timedelta(days=9), "", "встреча")],
+             next_date=T + timedelta(days=4), next_what="встреча с Киром"),          # шаг сменился, старый прошёл
+        Lead(6, "", "Лисина Ада", touches=[], next_date=T + timedelta(days=2), next_what="созвон"),   # перенос
+        Lead(7, "", "Жуков Илья", touches=[Touch(1, T - timedelta(days=9), "", "встреча"),
+                                            Touch(2, T, "", "созвон")], next_date=T + timedelta(days=3)),  # уже вручную
+        Lead(8, "", "Белова Ника", touches=[Touch(n, T - timedelta(days=10 - n), "", "x") for n in range(1, 6)],
+             next_date=T + timedelta(days=1)),                                         # все 5 заняты
+        Lead(9, "", "Соколова Ия", touches=[], next_date=None, next_what=""),            # шаг стёрли
+        Lead(10, "", "Новый Клиент", touches=[], next_date=T, next_what="созвон"),       # первый раз видим
+    ])
+    prev = {
+        ("Петрова Анна", "Котова Вера"): (T.isoformat(), "созвон с Антоном"),
+        ("Петрова Анна", "Лисина Ада"): ((T + timedelta(days=1)).isoformat(), "созвон"),
+        ("Петрова Анна", "Жуков Илья"): (T.isoformat(), "созвон"),
+        ("Петрова Анна", "Белова Ника"): ((T - timedelta(days=1)).isoformat(), "встреча"),
+        ("Петрова Анна", "Соколова Ия"): ((T - timedelta(days=2)).isoformat(), "переписка"),
+    }
+    moves, state, warnings = plan_moves([tab], prev, T)
+    assert [(m.client, m.row, m.n, m.when, m.what) for m in moves] == [
+        ("Котова Вера", 5, 2, T, "созвон с Антоном"),
+        ("Соколова Ия", 9, 1, T - timedelta(days=2), "переписка")]
+    assert len(warnings) == 1 and "Белова Ника" in warnings[0]
+    assert state[("Петрова Анна", "Новый Клиент")] == (T.isoformat(), "созвон")
+    assert plan_moves([tab], state, T)[0] == []      # повторный проход ничего не делает

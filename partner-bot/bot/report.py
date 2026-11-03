@@ -32,6 +32,7 @@ class Book:
     sandbox: bool
     directory: Directory
     gids: dict[str, int] = field(default_factory=dict)
+    tabs: list = field(default_factory=list)          # PartnerTab этой таблицы
 
 
 @dataclass
@@ -74,7 +75,8 @@ def load_network(cfg: Config, today: date, session=None, local_xlsx: bytes | Non
             if with_gids and session is not None and sid:
                 book.gids = Sheet(session, sid).tabs()
             net.books.append(book)
-            tabs += parse_partner_tabs(data, sandbox=sandbox)
+            book.tabs = parse_partner_tabs(data, sandbox=sandbox)
+            tabs += book.tabs
         except Exception as exc:
             log.exception("Не удалось прочитать таблицу %s", sid)
             what = "песочницу" if sandbox else "основную таблицу"
