@@ -47,7 +47,7 @@ class Added:
 
 def add_partner(cfg: Config, name: str, telegram: str, today: date, session=None) -> Added:
     if not cfg.sandbox_id:
-        raise OnboardingError("Песочница пока не подключена — руководителю нужно отправить /setsandbox ссылка.")
+        raise OnboardingError("Регистрация пока не открыта. Напиши, пожалуйста, Наталье Сергиенко (@Natalya_Sergienko) или Полине Кунегиной (@Polina_Kunegina).")
     session = session or google_session(cfg.service_account_file)
     nick = telegram.strip().lstrip("@")
     for sid in filter(None, [cfg.sandbox_id, cfg.sheet_id]):

@@ -32,7 +32,7 @@ log = logging.getLogger("partner-bot")
 
 GUIDE = (
     "<b>Как вести свою CRM</b> 🌿\n\n"
-    "Таблица — это твоя личная система ведения клиентов. Не отчёт для руководства, а инструмент "
+    "Таблица — это твоя личная система ведения клиентов. Не отчёт, а инструмент "
     "для тебя: от первой встречи до решения обычно проходит около пяти касаний, и если между ними "
     "долгая пауза, человек остывает. Таблица помогает никого не потерять.\n\n"
     "<b>Слева — клиенты.</b> Одна строка — один человек: откуда пришёл, даты и формат касаний "
@@ -212,7 +212,7 @@ async def on_private_text(update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> Non
         return
     except Exception:
         log.exception("Не удалось добавить партнёра")
-        await update.effective_message.reply_text("Что-то пошло не так, я сообщила руководителям.")
+        await update.effective_message.reply_text("Что-то пошло не так — напиши, пожалуйста, Наталье Сергиенко (@Natalya_Sergienko) или Полине Кунегиной (@Polina_Kunegina).")
         await _notify_managers(ctx, f"❗️ Не получилось завести вкладку для {name} (@{u.username}).")
         return
     await _send(ctx, update.effective_chat.id,
@@ -290,7 +290,7 @@ async def cmd_mine(update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> None:
     partner = net.directory.by_username(update.effective_user.username or "")
     if partner is None:
         await update.effective_message.reply_text(
-            "Не нашла тебя на листе «Партнёры». Попроси руководителя добавить твой @username.")
+            "Не нашла тебя на листе «Партнёры». Напиши Наталье Сергиенко (@Natalya_Sergienko) или Полине Кунегиной (@Polina_Kunegina) — они добавят.")
         return
     stats = next((s for s in net.stats if s.name == partner.name), None)
     if stats is None:
