@@ -15,7 +15,7 @@ from urllib.parse import quote
 
 from .guide import GUIDE, GUIDE_TAB, guide_requests, guide_values
 from .partners import Directory
-from .workbook import (MONTH_COL, PLAN_COL0, PLAN_HEADERS, RESULT_CATS, STATUSES, col_letter, link_cell,
+from .workbook import (MONTH_COL, PLAN_COL0, PLAN_HEADERS, STATUSES, col_letter, link_cell,
                        month_block_requests, month_block_values, partner_links,
                        partner_tab_format_requests, partner_tab_values, sep_for_locale)
 
@@ -347,18 +347,21 @@ def add_month_block(sh: Sheet, tab, gid: int, today: date) -> None:
         "startColumnIndex": COL_STATUS, "endColumnIndex": COL_STATUS + 1}, "rule": {
         "condition": {"type": "ONE_OF_LIST", "values": [{"userEnteredValue": x} for x in STATUSES]},
         "showCustomUi": True, "strict": False}}}]
-    r = sh.s.get(f"{API}/{sh.id}", params={"fields": "sheets(properties.sheetId,protectedRanges(protectedRangeId,description,range))"},
+    from .workbook import header_protection_ranges
+    r = sh.s.get(f"{API}/{sh.id}", params={"fields": "sheets(properties.sheetId,protectedRanges(protectedRangeId,description,range,editors))"},
                  timeout=30)
     r.raise_for_status()
     for x in r.json().get("sheets", []):
         if x["properties"]["sheetId"] != gid:
             continue
         for pr in x.get("protectedRanges", []):
-            if pr.get("description") == "bot:заголовки" and pr["range"].get("startRowIndex", 0) == 0:
-                reqs.append({"updateProtectedRange": {"protectedRange": {
-                    "protectedRangeId": pr["protectedRangeId"],
-                    "unprotectedRanges": [{"sheetId": gid, "startRowIndex": 1, "endRowIndex": 2,
-                                           "startColumnIndex": MONTH_COL + 1,
-                                           "endColumnIndex": MONTH_COL + 1 + len(RESULT_CATS)}]},
-                    "fields": "unprotectedRanges"}})
+            rg = pr["range"]
+            if pr.get("description") == "bot:заголовки" and rg.get("startRowIndex", 0) == 0 \
+                    and rg.get("endRowIndex") == HEADER_ROW:      # сплошная защита шапки — режем вокруг целей
+                width = rg.get("endColumnIndex")
+                reqs.append({"deleteProtectedRange": {"protectedRangeId": pr["protectedRangeId"]}})
+                for part in header_protection_ranges(gid, width):
+                    reqs.append({"addProtectedRange": {"protectedRange": {
+                        "range": part, "description": "bot:заголовки", "warningOnly": False,
+                        "editors": pr.get("editors", {})}}})
     sh.batch(reqs)

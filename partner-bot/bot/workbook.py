@@ -307,6 +307,16 @@ def partner_links(gid: int, plan_col: int, toc_gid: int | None, guide_gid: int |
     return reqs
 
 
+def header_protection_ranges(sheet_id: int, width: int) -> list[dict]:
+    """Строки 1–4 под защитой, кроме ячеек целей месяца (их вписывает партнёр)."""
+    g0, g1 = MONTH_COL + 1, MONTH_COL + 1 + len(RESULT_CATS)
+
+    def r(r0, r1, c0, c1):
+        return {"sheetId": sheet_id, "startRowIndex": r0, "endRowIndex": r1,
+                "startColumnIndex": c0, "endColumnIndex": c1}
+    return [r(0, 1, 0, width), r(1, 2, 0, g0), r(1, 2, g1, width), r(2, HEADER_ROW, 0, width)]
+
+
 def month_block_values(today: date, sep: str = ";") -> list[list]:
     m = MONTHS_NOM[today.month - 1]
     goal_l, goal_r = col_letter(MONTH_COL + 1), col_letter(MONTH_COL + len(RESULT_CATS))
@@ -504,11 +514,10 @@ def partner_tab_format_requests(sheet_id: int, sep: str = ";", service_email: st
         reqs.append(date_fmt(rng(f0, last, c, c + 1)))
         reqs.append(date_rule(c, "Дата прошедшего касания (календарь — двойной клик)"))
     if service_email:   # заголовки и даты в часах правит только бот (владелец таблицы — всегда)
-        for r in (rng(0, HEADER_ROW, 0, PLAN_COL0 + plan_w), rng(f0, last, PLAN_COL0, PLAN_COL0 + 1),
+        for r in (*header_protection_ranges(sheet_id, PLAN_COL0 + plan_w),
+                  rng(f0, last, PLAN_COL0, PLAN_COL0 + 1),
                   rng(f0, last, 0, 1), rng(f0, last, PLAN_COL0 + P_PCT, PLAN_COL0 + P_PCT + 1)):
-            pr = {"range": r, "description": "bot:заголовки", "warningOnly": False,
-                  "editors": {"users": [service_email]}}
-            if r["startRowIndex"] == 0:   # цели месяца партнёр вписывает сам
-                pr["unprotectedRanges"] = [rng(1, 2, MONTH_COL + 1, MONTH_COL + 1 + len(RESULT_CATS))]
-            reqs.append({"addProtectedRange": {"protectedRange": pr}})
+            reqs.append({"addProtectedRange": {"protectedRange": {
+                "range": r, "description": "bot:заголовки", "warningOnly": False,
+                "editors": {"users": [service_email]}}}})
     return reqs

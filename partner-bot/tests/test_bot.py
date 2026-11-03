@@ -164,7 +164,7 @@ def test_layout_and_formulas():
     reqs = json.dumps(partner_tab_format_requests(42, service_email="bot@x"), ensure_ascii=False)
     assert 'OR($D5=\\"\\";$D5<TODAY();$D5>TODAY()+7)' in reqs
     assert "=$S5=TODAY()+1" in reqs and "DATE_IS_VALID" in reqs
-    assert reqs.count("addProtectedRange") == 4
+    assert reqs.count("addProtectedRange") == 7   # шапка кусками вокруг целей + даты, №, %
 
 
 class Resp:
