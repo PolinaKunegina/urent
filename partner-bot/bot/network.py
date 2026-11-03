@@ -229,7 +229,7 @@ def render_partner_status(s: PartnerStats, today: date, tab_url: str = "") -> st
     if s.touch_today:
         out.append("📌 Сегодня по плану:")
         out += [f"  • {e(l.name)}" + (f" — {e(l.next_what)}" if l.next_what else "") for l in s.touch_today]
-        out.append("Если касание было — просто впиши новый следующий шаг, прошлый я сама перенесу в историю.")
+        out.append("Если касание было — впиши новый следующий шаг, он сам попадёт в историю касаний.")
     if s.touch_tomorrow:
         out.append("➡️ Касания завтра: " + ", ".join(e(l.name) for l in s.touch_tomorrow))
     out.append("⏱ Факт за сегодня: " + (_hours_line(s.today_fact) + " ч" if s.today_fact else "не заполнен"))

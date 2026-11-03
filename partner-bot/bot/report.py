@@ -15,7 +15,7 @@ from .config import Config, load_config
 from .network import (PartnerStats, compute_network, render_morning, render_weekly,
                       summary_rows)
 from .partners import Directory
-from .setup_sheet import Sheet, ensure_structure, write_summary
+from .setup_sheet import Sheet, ensure_structure, expand_history, write_summary
 from .sheets import fetch_xlsx, google_session, parse_partners
 from .workbook import parse_partner_tabs
 
@@ -93,6 +93,10 @@ def sync(cfg: Config, net: Network, session=None) -> list[str]:
     for b in net.books:
         try:
             created = ensure_structure(session, b.sheet_id, b.directory, net.today, sandbox=b.sandbox)
+            sh = Sheet(session, b.sheet_id)
+            for t in b.tabs:      # колонки касаний заканчиваются — добавляем новые
+                if t.history_full_soon() and t.name in b.gids:
+                    expand_history(sh, t, b.gids[t.name])
             if created:
                 log.info("Новые вкладки: %s", created)
             mine = [s for s in net.stats if s.sandbox == b.sandbox]

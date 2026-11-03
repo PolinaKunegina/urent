@@ -272,3 +272,36 @@ def rebuild_partner_tabs(session, spreadsheet_id: str, today: date, only: list[s
                                              "fields": "title"}}])
         done.append(t.name)
     return done
+
+
+HISTORY_ADD = 5   # сколько пар касаний добавлять за раз
+
+
+def expand_history(sh: Sheet, tab, gid: int, add: int = HISTORY_ADD) -> None:
+    """Добавляет пары «Дата N-го касания / Формат» после последней; блок часов сдвигается вправо."""
+    from .workbook import FIRST_ROW, HEADER_ROW, CLIENT_ROWS, COL_NEXT_DATE
+    last_n, _, last_fmt = tab.touch_cols[-1]
+    ins = last_fmt + 1
+    sh.batch([{"insertDimension": {"range": {"sheetId": gid, "dimension": "COLUMNS",
+                                             "startIndex": ins, "endIndex": ins + 2 * add},
+                                   "inheritFromBefore": True}}])
+    heads = []
+    for k in range(add):
+        heads += [f"Дата {last_n + k + 1}-го касания", "Формат"]
+    sh.put(f"'{tab.name}'!{col_letter(ins)}{HEADER_ROW}", [heads], raw=True)
+    reqs = []
+    for k in range(add):
+        c = ins + 2 * k
+        rng = {"sheetId": gid, "startRowIndex": FIRST_ROW - 1, "endRowIndex": HEADER_ROW + CLIENT_ROWS,
+               "startColumnIndex": c, "endColumnIndex": c + 1}
+        reqs.append({"repeatCell": {"range": rng, "cell": {"userEnteredFormat": {
+            "numberFormat": {"type": "DATE", "pattern": "dd.mm.yyyy"}}}, "fields": "userEnteredFormat.numberFormat"}})
+        reqs.append({"setDataValidation": {"range": rng, "rule": {"condition": {"type": "DATE_IS_VALID"},
+                                                                  "strict": True}}})
+    sh.batch(reqs)
+    if tab.plan_col is not None:   # ссылка «→ к моим часам» должна вести на новый адрес
+        new_plan = tab.plan_col + 2 * add
+        sh.put(f"'{tab.name}'!{col_letter(COL_NEXT_DATE)}1",
+               [[fx(f'=HYPERLINK("#gid={gid}&range={col_letter(new_plan)}{HEADER_ROW}","→ к моим часам")',
+                    sh.sep())]])
+    log.info("Вкладка «%s»: добавлено %d пар касаний", tab.name, add)

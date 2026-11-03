@@ -11,10 +11,6 @@ CREATE TABLE IF NOT EXISTS users (
     full_name TEXT,
     private_ok INTEGER DEFAULT 0   -- написал боту /start, значит можно писать в личку
 );
-CREATE TABLE IF NOT EXISTS steps (       -- последний известный «следующий шаг» клиента
-    book TEXT, tab TEXT, client TEXT, date TEXT, what TEXT,
-    PRIMARY KEY (book, tab, client)
-);
 CREATE TABLE IF NOT EXISTS settings (
     key TEXT PRIMARY KEY,
     value TEXT
@@ -51,13 +47,3 @@ class Store:
         with self.db:
             self.db.execute("INSERT INTO settings(key, value) VALUES (?, ?)"
                             " ON CONFLICT(key) DO UPDATE SET value=excluded.value", (key, value))
-
-    def get_steps(self, book: str) -> dict[tuple[str, str], tuple[str, str]]:
-        rows = self.db.execute("SELECT tab, client, date, what FROM steps WHERE book=?", (book,)).fetchall()
-        return {(t, c): (d or "", w or "") for t, c, d, w in rows}
-
-    def set_steps(self, book: str, steps: dict[tuple[str, str], tuple[str, str]]) -> None:
-        with self.db:
-            self.db.execute("DELETE FROM steps WHERE book=?", (book,))
-            self.db.executemany("INSERT INTO steps(book, tab, client, date, what) VALUES (?,?,?,?,?)",
-                                [(book, t, c, d, w) for (t, c), (d, w) in steps.items()])

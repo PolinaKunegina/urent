@@ -19,7 +19,6 @@ from telegram.constants import ParseMode
 from telegram.ext import (Application, CallbackQueryHandler, CommandHandler, ContextTypes,
                           MessageHandler, TypeHandler, filters)
 
-from .archive import apply_moves, plan_moves
 from .config import Config, load_config
 from .network import (e, needs_evening_ping, render_evening_chat, render_partner_status,
                       split_message)
@@ -37,8 +36,8 @@ GUIDE = (
     "для тебя: от первой встречи до решения обычно проходит около пяти касаний, и если между ними "
     "долгая пауза, человек остывает. Таблица помогает никого не потерять.\n\n"
     "<b>Слева — клиенты.</b> Главное — «Следующий шаг»: что и когда ты делаешь дальше с этим "
-    "человеком (дату выбирай в календаре двойным кликом). Касание прошло — просто впиши новый шаг, "
-    "прошлый я сама перенесу в историю касаний. Красным горит тот, у кого шага нет в ближайшие 7 дней.\n\n"
+    "человеком (дату выбирай в календаре двойным кликом). Вписанный шаг сразу копируется в историю касаний, "
+    "касание прошло — просто впиши новый шаг. Красным горит тот, у кого шага нет в ближайшие 7 дней.\n\n"
     "<b>Справа — день по часам</b> (ссылка «→ к моим часам» вверху). Вечером: факт за сегодня "
     "(зелёная строка) и план на завтра (голубая) по привлечению, прогреву и закрытию.\n\n"
     "<b>Вечерний ритуал до 19:00:</b> у всех клиентов есть следующий шаг, внесён факт, внесён план.\n\n"
@@ -430,29 +429,6 @@ async def job_evening(ctx: ContextTypes.DEFAULT_TYPE) -> None:
             log.exception("Не удалось написать партнёру %s", s.name)
 
 
-def _archive_steps(cfg: Config, store: Store, net) -> int:
-    from .setup_sheet import Sheet
-    from .sheets import google_session
-    moved = 0
-    for b in net.books:
-        if not b.sheet_id:
-            continue
-        previous = store.get_steps(b.sheet_id)
-        moves, state, warnings = plan_moves(b.tabs, previous, net.today)
-        if previous and moves:          # в самый первый раз только запоминаем шаги
-            apply_moves(Sheet(google_session(cfg.service_account_file), b.sheet_id), moves)
-            moved += len(moves)
-        for w in warnings:
-            log.warning(w)
-        store.set_steps(b.sheet_id, state)
-    return moved
-
-
-async def job_archive(ctx: ContextTypes.DEFAULT_TYPE) -> None:
-    net = await _network(ctx, with_gids=False)
-    await asyncio.to_thread(_archive_steps, _cfg(ctx), _store(ctx), net)
-
-
 async def job_sync(ctx: ContextTypes.DEFAULT_TYPE) -> None:
     net = await _network(ctx)
     for w in await asyncio.to_thread(sync, _cfg(ctx), net):
@@ -490,7 +466,6 @@ def main() -> None:
     if cfg.reminder_time:
         jq.run_daily(job_evening, time=cfg.reminder_time.replace(tzinfo=cfg.tz), name="evening")
     jq.run_repeating(job_sync, interval=3600, first=30, name="sync")
-    jq.run_repeating(job_archive, interval=600, first=60, name="archive")
 
     log.info("Бот запущен: сводка в %s, напоминание в %s, руководители %s",
              cfg.report_time, cfg.reminder_time, cfg.managers)

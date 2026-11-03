@@ -82,6 +82,15 @@ class PartnerTab:
     clients: list[Lead] = field(default_factory=list)
     days: dict[date, DayPlan] = field(default_factory=dict)
     sandbox: bool = False
+    touch_cols: list = field(default_factory=list)   # фактические колонки истории [(n, дата, формат)]
+    plan_col: int | None = None                      # колонка «Дата» блока часов
+
+    def history_full_soon(self) -> bool:
+        """У кого-то из клиентов осталось меньше двух свободных пар касаний."""
+        if not self.touch_cols:
+            return False
+        cap = len(self.touch_cols)
+        return any(max((t.n for t in c.touches), default=0) >= cap - 1 for c in self.clients)
 
 
 # ---------- разбор ----------
@@ -147,7 +156,7 @@ def _parse_rows(title: str, rows: list[tuple], sandbox: bool) -> PartnerTab:
     def cell(row, i):
         return row[i] if i is not None and i < len(row) else None
 
-    tab = PartnerTab(name=title, sandbox=sandbox)
+    tab = PartnerTab(name=title, sandbox=sandbox, touch_cols=touch_cols, plan_col=c_date)
     for offset, row in enumerate(rows[1:], 1):
         r_num = HEADER_ROW + offset
         name = _clean(cell(row, c_name))
@@ -223,7 +232,7 @@ def partner_tab_values(name: str, start: date, end: date, clients: list[dict] | 
     width = PLAN_COL0 + len(PLAN_HEADERS)
     grid = [["" for _ in range(width)] for _ in range(HEADER_ROW + CLIENT_ROWS)]
     grid[0][0] = f"Клиенты — {name}"
-    grid[1][0] = ("Следующий шаг — что и когда запланировано. Касания справа — история. "
+    grid[1][0] = ("Следующий шаг — что и когда запланировано, он сам копируется в касания справа. "
                   "Красным — клиент без шага в ближайшие 7 дней.")
     grid[0][PLAN_COL0] = "Мои часы по дням"
     grid[1][PLAN_COL0] = "Вечером: факт за сегодня (зелёная строка) и план на завтра (голубая)."
