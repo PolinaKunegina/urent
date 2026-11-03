@@ -42,8 +42,10 @@ PLAN_HEADERS = [
     "Дата",
     "Привлечение — план, ч", "Прогрев — план, ч", "Закрытие — план, ч",
     "Привлечение — факт, ч", "Прогрев — факт, ч", "Закрытие — факт, ч",
+    "Привлечение — людей", "Прогрев — людей", "Закрытие — людей",
     "Что делал(а) / комментарий",
 ]
+P_PLAN, P_FACT, P_PEOPLE, P_COMMENT = 1, 4, 7, 10   # смещения от PLAN_COL0
 PROCESSES = ["attract", "warmup", "close"]
 PROCESS_NAMES = {"attract": "привлечение", "warmup": "прогрев", "close": "закрытие"}
 
@@ -63,6 +65,7 @@ class DayPlan:
     plan: dict[str, float]     # процесс -> часы (только заполненные)
     fact: dict[str, float]
     comment: str = ""
+    people: dict[str, float] = field(default_factory=dict)   # сколько людей в работе (факт)
 
     @property
     def has_plan(self) -> bool:
@@ -138,6 +141,7 @@ def _parse_rows(title: str, rows: list[tuple], sandbox: bool) -> PartnerTab:
     c_date = next((i for i, h in enumerate(head) if h == "дата"), None)
     plan_cols = {p: find(f"{PROCESS_NAMES[p]} — план") for p in PROCESSES}
     fact_cols = {p: find(f"{PROCESS_NAMES[p]} — факт") for p in PROCESSES}
+    people_cols = {p: find(f"{PROCESS_NAMES[p]} — людей") for p in PROCESSES}
     c_comment = find("что делал")
 
     def cell(row, i):
@@ -164,7 +168,8 @@ def _parse_rows(title: str, rows: list[tuple], sandbox: bool) -> PartnerTab:
         if d:
             plan = {p: v for p in PROCESSES if (v := _num(cell(row, plan_cols[p]))) is not None}
             fact = {p: v for p in PROCESSES if (v := _num(cell(row, fact_cols[p]))) is not None}
-            tab.days[d] = DayPlan(d, plan, fact, _clean(cell(row, c_comment)))
+            people = {p: v for p in PROCESSES if (v := _num(cell(row, people_cols[p]))) is not None}
+            tab.days[d] = DayPlan(d, plan, fact, _clean(cell(row, c_comment)), people)
     return tab
 
 
@@ -184,6 +189,7 @@ PLAN_BG = {"red": 0.89, "green": 0.94, "blue": 0.99}
 RED_BG = {"red": 0.957, "green": 0.8, "blue": 0.8}
 RED_TEXT = {"red": 0.6, "green": 0.0, "blue": 0.0}
 TODAY_BG = {"red": 0.85, "green": 0.93, "blue": 0.83}
+PEOPLE_BG = {"red": 0.93, "green": 0.89, "blue": 0.98}
 LINK_BLUE = {"red": 0.07, "green": 0.33, "blue": 0.8}
 TOMORROW_BG = {"red": 0.85, "green": 0.92, "blue": 0.98}
 NEXT_BG = {"red": 0.99, "green": 0.85, "blue": 0.7}
@@ -240,10 +246,12 @@ def partner_tab_values(name: str, start: date, end: date, clients: list[dict] | 
         if dp:
             for i, p in enumerate(PROCESSES):
                 if p in dp.plan:
-                    row[PLAN_COL0 + 1 + i] = dp.plan[p]
+                    row[PLAN_COL0 + P_PLAN + i] = dp.plan[p]
                 if p in dp.fact:
-                    row[PLAN_COL0 + 4 + i] = dp.fact[p]
-            row[PLAN_COL0 + 7] = dp.comment
+                    row[PLAN_COL0 + P_FACT + i] = dp.fact[p]
+                if p in dp.people:
+                    row[PLAN_COL0 + P_PEOPLE + i] = dp.people[p]
+            row[PLAN_COL0 + P_COMMENT] = dp.comment
     for k, c in enumerate(clients or []):
         row = grid[FIRST_ROW - 1 + k]
         row[COL_NAME] = c.get("name", "")
@@ -316,17 +324,22 @@ def partner_tab_format_requests(sheet_id: int, sep: str = ";", service_email: st
         date_fmt(rng(f0, last, PLAN_COL0, PLAN_COL0 + 1)),
         width(0, 1, 40), width(1, 2, 190), width(2, 3, 140), width(3, 4, 110), width(4, 5, 190),
         width(5, 6, 170), width(6, 7, 260), width(7, crm_w, 100), width(crm_w, crm_w + 1, 24),
-        width(PLAN_COL0, PLAN_COL0 + 1, 95), width(PLAN_COL0 + 1, PLAN_COL0 + 7, 100),
-        width(PLAN_COL0 + 7, PLAN_COL0 + 8, 260),
+        width(PLAN_COL0, PLAN_COL0 + 1, 95), width(PLAN_COL0 + P_PLAN, PLAN_COL0 + P_PEOPLE, 100),
+        width(PLAN_COL0 + P_PEOPLE, PLAN_COL0 + P_COMMENT, 90),
+        width(PLAN_COL0 + P_COMMENT, PLAN_COL0 + P_COMMENT + 1, 260),
+        fill(rng(h0, HEADER_ROW, PLAN_COL0 + P_PEOPLE, PLAN_COL0 + P_COMMENT), PEOPLE_BG, bold=True, wrap=True),
         {"updateDimensionProperties": {"range": {"sheetId": sheet_id, "dimension": "ROWS",
                                                  "startIndex": h0, "endIndex": HEADER_ROW},
                                        "properties": {"pixelSize": 48}, "fields": "pixelSize"}},
         {"setDataValidation": {"range": rng(f0, last, COL_STATUS, COL_STATUS + 1), "rule": {
             "condition": {"type": "ONE_OF_LIST", "values": [{"userEnteredValue": s} for s in STATUSES]},
             "showCustomUi": True, "strict": False}}},
-        {"setDataValidation": {"range": rng(f0, last, PLAN_COL0 + 1, PLAN_COL0 + 7), "rule": {
+        {"setDataValidation": {"range": rng(f0, last, PLAN_COL0 + P_PLAN, PLAN_COL0 + P_PEOPLE), "rule": {
             "condition": {"type": "NUMBER_GREATER_THAN_EQ", "values": [{"userEnteredValue": "0"}]},
             "inputMessage": "Часы числом, например 1,5", "strict": True}}},
+        {"setDataValidation": {"range": rng(f0, last, PLAN_COL0 + P_PEOPLE, PLAN_COL0 + P_COMMENT), "rule": {
+            "condition": {"type": "NUMBER_GREATER_THAN_EQ", "values": [{"userEnteredValue": "0"}]},
+            "inputMessage": "Сколько людей было в работе по этому процессу сегодня", "strict": True}}},
         date_rule(COL_NEXT_DATE, "Когда следующий шаг? Выберите дату в календаре (двойной клик)"),
         {"addConditionalFormatRule": {"index": 0, "rule": {
             "ranges": [rng(f0, last, COL_NAME, COL_NAME + 1), rng(f0, last, COL_NEXT_DATE, COL_NEXT_DATE + 1)],

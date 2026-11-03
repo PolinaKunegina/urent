@@ -24,9 +24,9 @@ def partner_sheet(wb, name, clients, days=None, start=date(2026, 11, 3)):
     for row in grid:
         ws.append([date.fromisoformat(v) if isinstance(v, str) and len(v) == 10 and v[4] == "-" else
                    (None if isinstance(v, str) and v.startswith("=") else v) for v in row])
-    for d, plan, fact in days or []:
+    for d, plan, fact, *people in days or []:
         r = 5 + (d - start).days
-        for i, v in enumerate(plan + fact):
+        for i, v in enumerate(list(plan) + list(fact) + list(people[0] if people else ())):
             if v is not None:
                 ws.cell(row=r, column=PLAN_COL0 + 2 + i, value=v)
     return ws
@@ -50,7 +50,7 @@ def network_xlsx():
         {"name": "Гусев Семён", "status": "Отказ"},
         {"name": "Соколова Ия", "touches": [{"n": 1, "date": d(-3)}, {"n": 2, "date": d(1)}]},  # старый способ
         {"name": "Белых Ян", "next_date": d(-1), "next_what": "созвон"},                     # просрочен
-    ], days=[(TODAY - timedelta(days=1), [2, 1, 0], [1.5, 1, 0]),
+    ], days=[(TODAY - timedelta(days=1), [2, 1, 0], [1.5, 1, 0], (3, 2, None)),
              (TODAY - timedelta(days=2), [1, 1, 1], [1, 2, 1]),
              (TODAY, [None, None, None], [1, 0, 0]),
              (TODAY + timedelta(days=1), [2, 2, 0], [None, None, None])])
@@ -78,6 +78,7 @@ def test_parse_partner_tabs():
     assert [(t.n, t.when, t.fmt) for t in kv.touches] == [(1, TODAY - timedelta(days=5), "встреча")]
     y = anna.days[TODAY - timedelta(days=1)]
     assert y.plan == {"attract": 2, "warmup": 1, "close": 0} and y.fact == {"attract": 1.5, "warmup": 1, "close": 0}
+    assert y.people == {"attract": 3, "warmup": 2}
     assert min(anna.days) == date(2026, 11, 3) and max(anna.days) == date(2026, 12, 31)
 
 
@@ -106,7 +107,7 @@ def test_morning_report():
     assert "без касания в ближайшие 7 дней: <b>3</b>" in text
     assert "<b>Петрова Анна</b> (3): Лисина Ада, Жуков Илья, Белых Ян" in text
     assert "Ещё не внесли клиентов: Новикова Дарья" in text
-    assert "<b>Петрова Анна</b>: привлечение 1,5 (2) · прогрев 1 (1) · закрытие 0 (0)" in text
+    assert "<b>Петрова Анна</b>: привлечение 1,5 (2), 3 чел. · прогрев 1 (1), 2 чел. · закрытие 0 (0)" in text
     assert "Не заполнили факт: Новикова Дарья, Орлов Пётр" in text
     assert "https://sheet" in text
 
@@ -115,9 +116,10 @@ def test_weekly_and_summary():
     st = list(stats().values())
     w = render_weekly(st, TODAY)
     assert "Итоги недели 03.11–09.11" in w and "Петрова Анна" in w
+    assert "на человека: привлечение 0,8 ч/чел · прогрев 1,5 ч/чел" in w
     rows = summary_rows(st)
     anna = next(r for r in rows if r[0] == "Петрова Анна")
-    assert anna[2:6] == [5, 3, 40, 2] and anna[6:9] == [2.5, 3, 1]
+    assert anna[2:6] == [5, 3, 40, 2] and anna[6:9] == [2.5, 3, 1] and anna[9:12] == [3, 2, 0]
 
 
 def test_evening_texts():
@@ -142,6 +144,8 @@ def test_layout_and_formulas():
     assert head[1:7] == ["Имя клиента", "Откуда пришёл", "Следующий шаг: дата", "Следующий шаг: что",
                          "Текущий статус", "Что происходит"]
     assert head[7] == "Дата 1-го касания" and head[PLAN_COL0] == "Дата" and PLAN_COL0 == 18
+    assert head[PLAN_COL0 + 7:PLAN_COL0 + 11] == ["Привлечение — людей", "Прогрев — людей", "Закрытие — людей",
+                                                  "Что делал(а) / комментарий"]
     assert grid[4][COL_NEXT_DATE] == "2026-11-06" and grid[4][COL_NEXT_WHAT] == "созвон с Антоном"
     assert grid[0][COL_NEXT_DATE] == '=HYPERLINK("#gid=77&range=S4";"→ к моим часам")'
     assert grid[0][PLAN_COL0 + 3] == '=HYPERLINK("#gid=77&range=A4";"← к клиентам")'

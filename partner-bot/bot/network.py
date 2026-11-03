@@ -53,6 +53,8 @@ class PartnerStats:
     today_fact: dict = field(default_factory=dict)
     tomorrow_plan: dict = field(default_factory=dict)
     week: dict = field(default_factory=dict)                 # факт за 7 дней по процессам
+    week_people: dict = field(default_factory=dict)          # людей за 7 дней по процессам
+    yesterday_people: dict = field(default_factory=dict)
     month: dict = field(default_factory=dict)                # факт с 1-го числа по вчера
     activity: int = 0
 
@@ -99,10 +101,12 @@ def compute_partner(tab: PartnerTab, today: date) -> PartnerStats:
             if dp.has_fact:
                 ps.fact_days += 1
             add(ps.week, dp.fact)
+            add(ps.week_people, dp.people)
         if d.year == y.year and d.month == y.month and d <= y:
             add(ps.month, dp.fact)
     if y in tab.days:
         ps.yesterday_plan, ps.yesterday_fact = tab.days[y].plan, tab.days[y].fact
+        ps.yesterday_people = tab.days[y].people
     if today in tab.days:
         ps.today_fact = tab.days[today].fact
     if today + timedelta(days=1) in tab.days:
@@ -120,14 +124,23 @@ def compute_network(tabs: list[PartnerTab], today: date) -> list[PartnerStats]:
     return sorted(stats, key=lambda s: (s.sandbox, s.name.lower()))
 
 
-def _hours_line(fact: dict, plan: dict | None = None) -> str:
+def _hours_line(fact: dict, plan: dict | None = None, people: dict | None = None) -> str:
     out = []
     for p in PROCESSES:
         s = f"{PROCESS_NAMES[p]} {h(fact.get(p, 0))}"
         if plan:
             s += f" ({h(plan.get(p, 0))})"
+        if people and people.get(p):
+            s += f", {h(people[p])} чел."
         out.append(s)
     return " · ".join(out)
+
+
+def per_person(hours: dict, people: dict) -> str:
+    """«прогрев 0,8 ч/чел» — сколько часов уходит на одного человека."""
+    parts = [f"{PROCESS_NAMES[p]} {h(hours.get(p, 0) / people[p])} ч/чел"
+             for p in PROCESSES if people.get(p)]
+    return " · ".join(parts)
 
 
 # ---------- утро: руководителям ----------
@@ -155,7 +168,7 @@ def render_morning(stats: list[PartnerStats], today: date, sheet_url: str = "",
 
     out += ["", f"⏱ <b>Часы за {y:%d.%m}</b> — факт (план)"]
     with_hours = [s for s in stats if s.yesterday_fact or s.yesterday_plan]
-    out += [f"<b>{e(s.label)}</b>: {_hours_line(s.yesterday_fact, s.yesterday_plan or None)}"
+    out += [f"<b>{e(s.label)}</b>: {_hours_line(s.yesterday_fact, s.yesterday_plan or None, s.yesterday_people)}"
             for s in with_hours] or ["  никто не заполнил"]
     silent = [s.label for s in stats if not s.yesterday_fact]
     if silent:
@@ -180,8 +193,12 @@ def render_weekly(stats: list[PartnerStats], today: date) -> str:
     out = [f"🗓 <b>Итоги недели {start:%d.%m}–{end:%d.%m}</b>",
            f"Сеть за неделю: {_hours_line(tot_w)} ч", f"С начала месяца: {_hours_line(tot_m)} ч", ""]
     for s in sorted(stats, key=lambda s: -sum(s.week.values())):
-        out.append(f"<b>{e(s.label)}</b> — неделя: {_hours_line(s.week)}; месяц: {_hours_line(s.month)}"
-                   f"; факт {s.fact_days}/{s.window} дн.")
+        line = (f"<b>{e(s.label)}</b> — неделя: {_hours_line(s.week, people=s.week_people)}; "
+                f"месяц: {_hours_line(s.month)}; факт {s.fact_days}/{s.window} дн.")
+        eff = per_person(s.week, s.week_people)
+        if eff:
+            line += f"\n   на человека: {eff}"
+        out.append(line)
     top = max(stats, key=lambda s: sum(s.week.values()), default=None)
     if top and sum(top.week.values()):
         out.append(f"\n🏆 Больше всего часов за неделю: {e(top.label)} ({h(sum(top.week.values()))} ч)")
@@ -229,7 +246,8 @@ def summary_rows(stats: list[PartnerStats]) -> list[list]:
     for s in sorted(stats, key=lambda s: -s.activity):
         share = round(100 * (1 - len(s.no_touch) / len(s.active))) if s.active else ""
         rows.append([s.label, s.activity, len(s.active), len(s.no_touch), share, s.fact_days,
-                     *[s.week.get(p, 0) for p in PROCESSES], *[s.month.get(p, 0) for p in PROCESSES]])
+                     *[s.week.get(p, 0) for p in PROCESSES], *[s.week_people.get(p, 0) for p in PROCESSES],
+                     *[s.month.get(p, 0) for p in PROCESSES]])
     return rows
 
 
