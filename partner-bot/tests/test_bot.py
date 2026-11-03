@@ -187,7 +187,8 @@ def test_ensure_structure_creates_missing_tabs_and_toc():
     assert toc[6] == ["Петрова Анна", '=HYPERLINK("#gid=2";"Открыть →")', "@anna_p"]
     fresh = FakeSheets({"Лист1": 0})
     ensure_structure(fresh, "SB", Directory([]), TODAY, sandbox=True)
-    assert "Партнёры" in fresh.tabs and "Оглавление" in fresh.tabs
+    assert "Партнёры" in fresh.tabs and "Оглавление" in fresh.tabs and "Инструкция" in fresh.tabs
+    assert ensure_structure(fake, "ID", d, TODAY) == [] and "Инструкция" in fake.tabs
     assert puts["'Орлов Пётр'!A1"][3][1] == "Имя клиента"
     assert ensure_structure(fake, "ID", d, TODAY) == []   # второй раз ничего не создаёт
 
@@ -214,3 +215,24 @@ def test_store(tmp_path):
     assert st.user_by_username("@anna_p") == (5, True)
     st.set_setting("sheet_id", "x")
     assert st.get_setting("sheet_id") == "x"
+
+
+def test_onboarding_helpers():
+    import pytest
+    from bot.onboarding import OnboardingError, clean_name, due_for_promotion
+    from bot.partners import Partner
+    assert clean_name("  иванова   мария ") == "Иванова Мария"
+    assert clean_name("Петрова-Водкина Анна") == "Петрова-Водкина Анна"
+    for bad in ["Мария", "Иванова Мария 1990", "привет как дела у тебя сегодня", "@ivanov"]:
+        with pytest.raises(OnboardingError):
+            clean_name(bad)
+    d = Directory([Partner("Новикова Дарья", added=TODAY - timedelta(days=14)),
+                   Partner("Белова Ника", added=TODAY - timedelta(days=3)), Partner("Без Даты")])
+    assert due_for_promotion(d, TODAY) == [("Новикова Дарья", TODAY - timedelta(days=14))]
+
+
+def test_guide_tab_content():
+    from bot.guide import GUIDE, guide_values
+    text = " ".join(t for _, t in GUIDE)
+    assert "прообраз" in text and "Советник" in text and "красным" in text
+    assert guide_values()[0][0].startswith("Ваша CRM")

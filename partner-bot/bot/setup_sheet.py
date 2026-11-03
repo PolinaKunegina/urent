@@ -13,6 +13,7 @@ import time as _time
 from datetime import date
 from urllib.parse import quote
 
+from .guide import GUIDE, GUIDE_TAB, guide_requests, guide_values
 from .partners import Directory
 from .workbook import (PLAN_COL0, PLAN_HEADERS, col_letter, fx, partner_tab_format_requests,
                        partner_tab_values, sep_for_locale)
@@ -71,6 +72,17 @@ class Sheet:
                        json={"range": rng, "values": values}, timeout=60)
         r.raise_for_status()
 
+    def append(self, rng: str, values: list[list]) -> None:
+        r = self.s.post(f"{API}/{self.id}/values/{quote(rng)}:append",
+                        params={"valueInputOption": "USER_ENTERED", "insertDataOption": "INSERT_ROWS"},
+                        json={"values": values}, timeout=30)
+        r.raise_for_status()
+
+    def get_values(self, rng: str) -> list[list]:
+        r = self.s.get(f"{API}/{self.id}/values/{quote(rng)}", timeout=30)
+        r.raise_for_status()
+        return r.json().get("values", [])
+
     def clear(self, rng: str) -> None:
         r = self.s.post(f"{API}/{self.id}/values/{quote(rng)}:clear", json={}, timeout=30)
         r.raise_for_status()
@@ -105,8 +117,8 @@ def write_toc(sh: Sheet, directory: Directory, tabs: dict[str, int], sandbox: bo
     title = "Песочница новых партнёров" if sandbox else "Партнёрская сеть — CRM и планирование"
     rows = [
         [title],
-        ["Найдите себя в списке и нажмите ссылку — откроется ваша вкладка."],
-        ["Слева на вкладке — ваши клиенты и 5 касаний, справа — план и факт часов по дням."],
+        ["Найдите себя в списке и нажмите «Открыть →» — это ваша личная CRM."],
+        [f"Впервые здесь? Начните с листа «{GUIDE_TAB}» — 5 минут чтения."],
         ["Каждый вечер до 19:00: даты следующих касаний, факт за сегодня, план на завтра."],
         [f"Общая статистика — на листе «{SUMMARY}»."],
         ["Партнёр", "Вкладка", "Telegram"],
@@ -121,7 +133,8 @@ def write_toc(sh: Sheet, directory: Directory, tabs: dict[str, int], sandbox: bo
 
 
 def ensure_structure(session, spreadsheet_id: str, directory: Directory, today: date,
-                     prefill: dict[str, list[dict]] | None = None, sandbox: bool = False) -> list[str]:
+                     prefill: dict[str, list[dict]] | None = None, sandbox: bool = False,
+                     force_toc: bool = False) -> list[str]:
     """Создаёт недостающие вкладки партнёров, обновляет оглавление. Возвращает созданные."""
     sh = Sheet(session, spreadsheet_id)
     sh.batch([{"updateSpreadsheetProperties": {"properties": {"timeZone": "Europe/Moscow"},
@@ -130,14 +143,19 @@ def ensure_structure(session, spreadsheet_id: str, directory: Directory, today: 
     if PARTNERS not in tabs:   # новая таблица (например, песочница) — заводим справочник
         from .sheets import PARTNERS_HEADER
         tabs[PARTNERS] = sh.add_tab(PARTNERS, rows=200, cols=4)
-        sh.put(f"'{PARTNERS}'!A1", [PARTNERS_HEADER, ["Фамилия Имя", "@ник", ""]], raw=True)
+        sh.put(f"'{PARTNERS}'!A1", [PARTNERS_HEADER], raw=True)
     created = []
     for p in directory.partners:
         if p.name in tabs:
             continue
         tabs[p.name] = create_partner_tab(sh, p.name, today, (prefill or {}).get(p.name))
         created.append(p.name)
-    if created or TOC not in tabs:
+    if GUIDE_TAB not in tabs:
+        gid = sh.add_tab(GUIDE_TAB, index=1, rows=len(GUIDE) + 5, cols=2)
+        sh.put(f"'{GUIDE_TAB}'!A1", guide_values(), raw=True)
+        sh.batch(guide_requests(gid))
+        tabs[GUIDE_TAB] = gid
+    if created or force_toc or TOC not in tabs:
         write_toc(sh, directory, tabs, sandbox)
     return created
 

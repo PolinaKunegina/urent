@@ -16,6 +16,7 @@
 from __future__ import annotations
 
 import json
+from datetime import date
 import re
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -35,6 +36,7 @@ class Partner:
     name: str
     aliases: list[str] = field(default_factory=list)
     telegram: str = ""        # @username без @, в нижнем регистре
+    added: "date | None" = None   # когда добавлен (для песочницы: перевод через 2 недели)
 
     @property
     def username(self) -> str:
@@ -54,7 +56,7 @@ class Directory:
     @classmethod
     def from_records(cls, raw: list[dict]) -> "Directory":
         return cls([Partner(name=x["name"], aliases=x.get("aliases", []),
-                            telegram=x.get("telegram", "")) for x in raw])
+                            telegram=x.get("telegram", ""), added=x.get("added")) for x in raw])
 
     @classmethod
     def load(cls, path: str) -> "Directory":

@@ -14,13 +14,15 @@ import logging
 import re
 from datetime import datetime
 
-from telegram import Update
+from telegram import InlineKeyboardButton, InlineKeyboardMarkup, Update
 from telegram.constants import ParseMode
-from telegram.ext import Application, CommandHandler, ContextTypes, TypeHandler
+from telegram.ext import (Application, CallbackQueryHandler, CommandHandler, ContextTypes,
+                          MessageHandler, TypeHandler, filters)
 
 from .config import Config, load_config
-from .network import (needs_evening_ping, render_evening_chat, render_partner_status,
+from .network import (e, needs_evening_ping, render_evening_chat, render_partner_status,
                       split_message)
+from .onboarding import OnboardingError, add_partner, clean_name, promote
 from .report import load_network, morning_text, sync, weekly_text
 from .store import Store
 
@@ -29,15 +31,17 @@ logging.getLogger("httpx").setLevel(logging.WARNING)
 log = logging.getLogger("partner-bot")
 
 GUIDE = (
-    "<b>Как вести таблицу</b> 🌿\n\n"
-    "У тебя своя вкладка с твоим именем (ссылка — в «Оглавлении» таблицы или по /mine).\n\n"
-    "<b>Слева — твои клиенты.</b> Имя, откуда пришёл, даты и формат касаний (до пяти), статус "
-    "и что происходит. Дату выбирай в календаре двойным кликом. Колонка «Ближайшее касание» "
-    "считается сама. Красным подсвечен клиент, у которого в ближайшие 7 дней нет касания — "
-    "поставь ему дату.\n\n"
-    "<b>Справа — часы по дням.</b> Каждый вечер до 19:00: факт за сегодня и план на завтра "
-    "по трём процессам — привлечение, прогрев, закрытие. Строка сегодняшнего дня зелёная.\n\n"
-    "Вечером я напомню в личку, если что-то не заполнено."
+    "<b>Как вести свою CRM</b> 🌿\n\n"
+    "Таблица — это твоя личная система ведения клиентов. Не отчёт для руководства, а инструмент "
+    "для тебя: от первой встречи до решения обычно проходит около пяти касаний, и если между ними "
+    "долгая пауза, человек остывает. Таблица помогает никого не потерять.\n\n"
+    "<b>Слева — клиенты.</b> Одна строка — один человек: откуда пришёл, даты и формат касаний "
+    "(дату выбирай в календаре двойным кликом), статус и что происходит. Договорились о следующем "
+    "шаге — сразу внеси его дату. Красным горит тот, с кем в ближайшие 7 дней ничего не запланировано.\n\n"
+    "<b>Справа — день по часам.</b> Вечером: факт за сегодня и план на завтра по привлечению, "
+    "прогреву и закрытию. Так видно, куда реально уходит время.\n\n"
+    "<b>Вечерний ритуал до 19:00:</b> у всех клиентов есть следующее касание, внесён факт, внесён план.\n\n"
+    "Подробно — на листе «Инструкция» в таблице. Твоя вкладка — по команде /mine."
 )
 
 HELP = (
@@ -51,6 +55,8 @@ HELP = (
     "/bindchat — отправить в чате (или теме) партнёров, куда слать напоминания\n"
     "/setsheet ссылка — основная таблица\n"
     "/setsandbox ссылка — таблица-песочница новых партнёров\n"
+    "/addpartner Фамилия Имя @ник — добавить новичка в песочницу\n"
+    "/promote Фамилия Имя — перевести из песочницы в основную таблицу\n"
     "/myid — id чата и пользователя"
 )
 
@@ -139,11 +145,119 @@ async def cmd_start(update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> None:
     u = update.effective_user
     net = ctx.application.bot_data.get("net")
     partner = net.directory.by_username(u.username or "") if net else None
+    markup = None
     if _cfg(ctx).managers and _is_manager(ctx, update):
         lines.insert(0, "✅ Ты в списке руководителей: сводка будет приходить сюда каждое утро в 8:00.\n")
     elif partner:
         lines.insert(0, f"✅ Ты партнёр «{partner.name}»: вечером пришлю твою сводку по таблице.\n")
-    await update.effective_message.reply_text("\n".join(lines))
+    elif update.effective_chat.type == "private":
+        lines = ["Привет! 🌿 Я помогаю партнёрам сети вести клиентов и планировать день.\n\n"
+                 "Если ты новый партнёр — нажми кнопку ниже: заведу тебе личную вкладку в таблице, "
+                 "где будут твои клиенты и план по часам."]
+        markup = InlineKeyboardMarkup([[InlineKeyboardButton("🌱 Я новый партнёр", callback_data="join")]])
+    await update.effective_message.reply_text("\n".join(lines), reply_markup=markup)
+
+
+# ---------- новые партнёры ----------
+
+async def _ask_name(ctx, update: Update) -> None:
+    u = update.effective_user
+    if not u.username:
+        await ctx.bot.send_message(
+            update.effective_chat.id,
+            "Чтобы я мог тебя узнавать, задай в Telegram имя пользователя: Настройки → Имя пользователя. "
+            "Потом снова нажми /join.")
+        return
+    ctx.user_data["join"] = True
+    await ctx.bot.send_message(update.effective_chat.id,
+                               "Напиши, пожалуйста, свои фамилию и имя, например: Иванова Мария")
+
+
+async def on_join_button(update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> None:
+    await update.callback_query.answer()
+    await _ask_name(ctx, update)
+
+
+async def cmd_join(update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> None:
+    if update.effective_chat.type != "private":
+        await update.effective_message.reply_text("Напиши мне /join в личные сообщения 🌿")
+        return
+    await _ask_name(ctx, update)
+
+
+async def _notify_managers(ctx, text: str) -> None:
+    for chat_id in _manager_ids(ctx)[0]:
+        try:
+            await _send(ctx, chat_id, text)
+        except Exception:
+            log.exception("Не удалось уведомить руководителя %s", chat_id)
+
+
+async def on_private_text(update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> None:
+    if not ctx.user_data.get("join"):
+        return
+    u = update.effective_user
+    try:
+        name = clean_name(update.effective_message.text)
+    except OnboardingError as err:
+        await update.effective_message.reply_text(str(err))
+        return
+    ctx.user_data.pop("join", None)
+    await update.effective_message.reply_text("Создаю твою вкладку…")
+    _apply_overrides(ctx)
+    try:
+        added = await asyncio.to_thread(add_partner, _cfg(ctx), name, u.username or "", _today(_cfg(ctx)))
+    except OnboardingError as err:
+        await update.effective_message.reply_text(str(err))
+        return
+    except Exception:
+        log.exception("Не удалось добавить партнёра")
+        await update.effective_message.reply_text("Что-то пошло не так, я сообщила руководителям.")
+        await _notify_managers(ctx, f"❗️ Не получилось завести вкладку для {name} (@{u.username}).")
+        return
+    await _send(ctx, update.effective_chat.id,
+                f"Готово, {e(added.name.split()[-1])}! 🌱 Вот твоя вкладка: {added.tab_url}\n\n" + GUIDE)
+    await _notify_managers(ctx, f"🌱 Новый партнёр в песочнице: <b>{e(added.name)}</b> (@{e(u.username)})\n"
+                                f"{added.tab_url}")
+
+
+async def cmd_addpartner(update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> None:
+    if not _is_manager(ctx, update):
+        return await _deny(update)
+    args = ctx.args or []
+    nick = next((a for a in args if a.startswith("@")), "")
+    try:
+        name = clean_name(" ".join(a for a in args if a != nick))
+    except OnboardingError:
+        await update.effective_message.reply_text("Так: /addpartner Иванова Мария @ivanova_m")
+        return
+    _apply_overrides(ctx)
+    try:
+        added = await asyncio.to_thread(add_partner, _cfg(ctx), name, nick, _today(_cfg(ctx)))
+    except OnboardingError as err:
+        await update.effective_message.reply_text(str(err))
+        return
+    await update.effective_message.reply_text(
+        f"✅ {added.name} — в песочнице, вкладка: {added.tab_url}\n"
+        "Попроси партнёра нажать Start у бота, чтобы он получал напоминания.")
+
+
+async def cmd_promote(update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> None:
+    if not _is_manager(ctx, update):
+        return await _deny(update)
+    query = " ".join(ctx.args or []).strip()
+    if not query:
+        await update.effective_message.reply_text("Так: /promote Иванова Мария")
+        return
+    _apply_overrides(ctx)
+    await update.effective_message.reply_text("Переношу вкладку в основную таблицу…")
+    try:
+        moved = await asyncio.to_thread(promote, _cfg(ctx), query, _today(_cfg(ctx)))
+    except OnboardingError as err:
+        await update.effective_message.reply_text(str(err))
+        return
+    await update.effective_message.reply_text(
+        f"✅ {moved.name} теперь в основной таблице со всеми клиентами и часами: {moved.tab_url}")
 
 
 async def cmd_guide(update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> None:
@@ -340,6 +454,12 @@ def main() -> None:
     app.add_handler(CommandHandler("setsheet", cmd_setsheet))
     app.add_handler(CommandHandler("setsandbox", cmd_setsandbox))
     app.add_handler(CommandHandler("status", cmd_status))
+    app.add_handler(CommandHandler("join", cmd_join))
+    app.add_handler(CommandHandler("addpartner", cmd_addpartner))
+    app.add_handler(CommandHandler("promote", cmd_promote))
+    app.add_handler(CallbackQueryHandler(on_join_button, pattern=r"^join$"))
+    app.add_handler(MessageHandler(filters.ChatType.PRIVATE & filters.TEXT & ~filters.COMMAND,
+                                   on_private_text))
 
     jq = app.job_queue
     jq.run_daily(job_morning, time=cfg.report_time.replace(tzinfo=cfg.tz), name="morning")

@@ -104,7 +104,13 @@ def sync(cfg: Config, net: Network, session=None) -> list[str]:
 
 
 def morning_text(net: Network) -> str:
-    return render_morning(net.stats, net.today, net.main_url(), net.errors)
+    from .onboarding import SANDBOX_DAYS, due_for_promotion
+    text = render_morning(net.stats, net.today, net.main_url(), net.errors)
+    due = [x for b in net.books if b.sandbox for x in due_for_promotion(b.directory, net.today)]
+    if due:
+        text += (f"\n\n🌱 <b>{SANDBOX_DAYS} дней в песочнице — пора переводить в основную таблицу</b>\n"
+                 + "\n".join(f"{n} (с {d:%d.%m}) — /promote {n}" for n, d in due))
+    return text
 
 
 def weekly_text(net: Network) -> str:
