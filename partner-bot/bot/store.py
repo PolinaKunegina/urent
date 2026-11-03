@@ -82,3 +82,7 @@ class Store:
         with self.db:
             self.db.executemany("INSERT INTO goals_archive VALUES (?,?,?,?,?,?)",
                                 [(book, t, month, c, g, r) for t, c, g, r in rows])
+
+    def has_result(self, book: str, tab: str, client: str, cat: str, month: str) -> bool:
+        return self.db.execute("SELECT 1 FROM results WHERE book=? AND tab=? AND client=? AND cat=? "
+                               "AND day LIKE ? LIMIT 1", (book, tab, client, cat, f"{month}%")).fetchone() is not None

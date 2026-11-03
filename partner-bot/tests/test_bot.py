@@ -277,7 +277,7 @@ def test_month_results(tmp_path):
     st = Store(str(tmp_path / "t.db"))
     tab = PartnerTab("Петрова Анна", clients=[Lead(5, "", "Котова Вера", status="Думает"),
                                               Lead(6, "", "Орлов Пётр", status="Оплатил 95")])
-    assert track(st, "B", [tab], TODAY) == []                     # первый запуск — только запоминаем
+    assert track(st, "B", [tab], TODAY) == []                     # оплата без касаний в месяце — не результат
     tab.clients[0].status = "Оплатил 240"                         # Вера купила 240
     tab.clients.append(Lead(7, "", "Новый Ян", status="Оплатил интенсив 5000"))   # новый сразу с оплатой
     new = track(st, "B", [tab], TODAY)
@@ -304,3 +304,18 @@ def test_month_block_parsed():
     assert tab.results == {"partners": 1, "c95": 2, "c240": 0, "c5000": 1}
     s = next(x for x in compute_network([tab], TODAY))
     assert "🎯 Месяц (факт/цель): партнёры 1/3 · 95 2/5 · 240 0/2 · интенсив 1/4" in render_partner_status(s, TODAY)
+
+
+
+def test_backfill_counts_payment_with_touch_this_month(tmp_path):
+    from bot.results import track
+    from bot.sheets import Lead, Touch
+    from bot.workbook import PartnerTab
+    st = Store(str(tmp_path / "t.db"))
+    tab = PartnerTab("Кунегина Полина", clients=[
+        Lead(8, "", "Жуков Илья", status="Оплатил интенсив 5000",
+             touches=[Touch(1, date(2026, 10, 29), "", "встреча"), Touch(3, date(2026, 11, 2), "", "оплата")]),
+        Lead(9, "", "Старый Клиент", status="Оплатил 240", touches=[Touch(1, date(2026, 10, 1), "", "x")])])
+    new = track(st, "B", [tab], date(2026, 11, 3))
+    assert [(c, k) for _, c, k, _ in new] == [("Жуков Илья", "c5000")]
+    assert track(st, "B", [tab], date(2026, 11, 3)) == []        # второй раз не дублирует

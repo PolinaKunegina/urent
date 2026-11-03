@@ -34,6 +34,20 @@ def track(store: Store, book: str, tabs: list[PartnerTab], today: date) -> list[
             for c in t.clients:
                 if (t.name, c.name) not in prev:
                     new += [(t.name, c.name, cat, today.isoformat()) for cat in sorted(result_cats(c.status))]
+    # Один раз в месяц на таблицу: оплаты, которые уже стояли в статусах, засчитываем в текущий
+    # месяц, если у клиента есть касание в этом месяце (значит, оплата случилась в нём).
+    flag = f"results_backfill:{book}:{today:%Y-%m}"
+    if not store.get_setting(flag):
+        month = today.strftime("%Y-%m")
+        for t in tabs:
+            for c in t.clients:
+                if not any(x.when and x.when.strftime("%Y-%m") == month and x.when <= today for x in c.touches):
+                    continue
+                for cat in sorted(result_cats(c.status)):
+                    item = (t.name, c.name, cat, today.isoformat())
+                    if item not in new and not store.has_result(book, t.name, c.name, cat, month):
+                        new.append(item)
+        store.set_setting(flag, "done")
     store.add_results(book, new)
     store.save_statuses(book, seen)
     return new
