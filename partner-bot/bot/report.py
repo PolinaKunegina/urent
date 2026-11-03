@@ -109,6 +109,18 @@ def sync(cfg: Config, net: Network, session=None) -> list[str]:
     return warnings
 
 
+def weekly_snapshot(cfg: Config, net: Network, session=None) -> None:
+    """Снимок недели на лист «Итоги недели» — из него готовят презентацию к пятнице."""
+    from datetime import timedelta
+    session = session or google_session(cfg.service_account_file)
+    start, end = net.today - timedelta(days=7), net.today - timedelta(days=1)
+    stamp = datetime.now(cfg.tz).strftime("%d.%m.%Y %H:%M")
+    for b in net.books:
+        mine = [s for s in net.stats if s.sandbox == b.sandbox]
+        write_summary(session, b.sheet_id, summary_rows(mine), stamp, tab="Итоги недели",
+                      title=f"Итоги недели {start:%d.%m}–{end:%d.%m} (снимок, часы за 7 дней)")
+
+
 def morning_text(net: Network) -> str:
     from .onboarding import SANDBOX_DAYS, due_for_promotion
     text = render_morning(net.stats, net.today, net.main_url(), net.errors)

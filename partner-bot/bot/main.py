@@ -50,7 +50,7 @@ HELP = (
     "/guide — как вести таблицу\n\n"
     "Руководителям:\n"
     "/report — утренняя сводка сейчас\n"
-    "/week — итоги последних 7 дней\n"
+    "/week — итоги последних 7 дней (сами приходят по четвергам в 15:00)\n"
     "/status — проверка настроек\n"
     "/bindchat — отправить в чате (или теме) партнёров, куда слать напоминания\n"
     "/pause — пауза рассылок (до завтрашнего полудня или /pause 2026-11-10), /resume — включить\n"
@@ -436,11 +436,8 @@ async def job_morning(ctx: ContextTypes.DEFAULT_TYPE) -> None:
     if _paused(ctx):
         log.info("Пауза рассылок — утреннюю сводку не отправляю")
         return
-    cfg = _cfg(ctx)
     net = await _network(ctx)
     texts = [morning_text(net)]
-    if cfg.weekly_day is not None and net.today.weekday() == cfg.weekly_day:
-        texts.append(weekly_text(net))
     ids, missing = _manager_ids(ctx)
     if missing:
         log.warning("Руководители не нажали Start, сводку им не отправить: %s", missing)
@@ -450,6 +447,28 @@ async def job_morning(ctx: ContextTypes.DEFAULT_TYPE) -> None:
                 await _send(ctx, chat_id, t)
             except Exception:
                 log.exception("Не удалось отправить сводку %s", chat_id)
+
+
+async def job_weekly(ctx: ContextTypes.DEFAULT_TYPE) -> None:
+    """Четверг 15:00: итоги недели руководителям + снимок на листе «Итоги недели» для презентации."""
+    cfg = _cfg(ctx)
+    if cfg.weekly_day is None or datetime.now(cfg.tz).weekday() != cfg.weekly_day:
+        return
+    if _paused(ctx):
+        log.info("Пауза рассылок — итоги недели не отправляю")
+        return
+    net = await _network(ctx)
+    try:
+        from .report import weekly_snapshot
+        await asyncio.to_thread(weekly_snapshot, cfg, net)
+    except Exception:
+        log.exception("Не удалось записать лист «Итоги недели»")
+    text = weekly_text(net)
+    for chat_id in _manager_ids(ctx)[0]:
+        try:
+            await _send(ctx, chat_id, text)
+        except Exception:
+            log.exception("Не удалось отправить итоги недели %s", chat_id)
 
 
 async def job_evening(ctx: ContextTypes.DEFAULT_TYPE) -> None:
@@ -537,6 +556,7 @@ def main() -> None:
 
     jq = app.job_queue
     jq.run_daily(job_morning, time=cfg.report_time.replace(tzinfo=cfg.tz), name="morning")
+    jq.run_daily(job_weekly, time=cfg.weekly_time.replace(tzinfo=cfg.tz), name="weekly")
     if cfg.reminder_time:
         jq.run_daily(job_evening, time=cfg.reminder_time.replace(tzinfo=cfg.tz), name="evening")
     jq.run_repeating(job_sync, interval=3600, first=30, name="sync")

@@ -197,7 +197,9 @@ SUMMARY_HEADER = [
 ]
 
 
-def write_summary(session, spreadsheet_id: str, rows: list[list], updated: str) -> None:
+def write_summary(session, spreadsheet_id: str, rows: list[list], updated: str,
+                  tab: str = None, title: str = "Сводка по партнёрам (обновляет бот)") -> None:
+    SUMMARY = tab or globals()["SUMMARY"]
     sh = Sheet(session, spreadsheet_id)
     tabs = sh.tabs()
     if SUMMARY not in tabs:
@@ -215,7 +217,7 @@ def write_summary(session, spreadsheet_id: str, rows: list[list], updated: str) 
                                            "properties": {"pixelSize": 200}, "fields": "pixelSize"}},
         ])
     sh.clear(f"'{SUMMARY}'!A1:{col_letter(len(SUMMARY_HEADER))}400")
-    sh.put(f"'{SUMMARY}'!A1", [["Сводка по партнёрам (обновляет бот)", f"обновлено {updated}"], [],
+    sh.put(f"'{SUMMARY}'!A1", [[title, f"обновлено {updated}"], [],
                                 SUMMARY_HEADER, *rows], raw=True)
     tabs = sh.tabs()
     nav = [(t, f"#gid={tabs[k]}") for t, k in (("← Оглавление", TOC), ("📖 Инструкция", GUIDE_TAB)) if k in tabs]

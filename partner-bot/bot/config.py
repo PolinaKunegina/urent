@@ -20,7 +20,8 @@ class Config:
     partners_chat_id: int | None = None      # можно не задавать: /bindchat в чате партнёров
     report_time: time = time(8, 0)
     reminder_time: time | None = time(18, 30)
-    weekly_day: int | None = 0               # 0 = понедельник, None = без недельной сводки
+    weekly_day: int | None = 3               # итоги недели: 3 = четверг (к пятничной встрече)
+    weekly_time: time = time(15, 0)          # в 15:00 — чтобы к пятнице успеть сделать презентацию
     tz: ZoneInfo = ZoneInfo("Europe/Moscow")
     exclude_status_regex: str = r"отказ"
     closed_status_regex: str = r"стал ментором|оплатил пакет|240"   # сделка закрыта, касание не нужно
@@ -57,7 +58,7 @@ def _bool(raw: str) -> bool:
 def load_config() -> Config:
     env = os.environ.get
     partners_chat = env("PARTNERS_CHAT_ID", "").strip()
-    weekly = env("WEEKLY_DAY", "0").strip()
+    weekly = env("WEEKLY_REPORT_DAY", "3").strip()   # старый WEEKLY_DAY (понедельник) больше не читаем
     return Config(
         bot_token=env("TELEGRAM_BOT_TOKEN", ""),
         service_account_file=env("GOOGLE_SERVICE_ACCOUNT_FILE", "secrets/service-account.json"),
@@ -70,6 +71,7 @@ def load_config() -> Config:
         report_time=_time(env("REPORT_TIME", "08:00")) or time(8, 0),
         reminder_time=_time(env("REMINDER_TIME", "18:30")),
         weekly_day=None if weekly.lower() in {"off", "-", ""} else int(weekly),
+        weekly_time=_time(env("WEEKLY_REPORT_TIME", "15:00")) or time(15, 0),
         tz=ZoneInfo(env("TZ_NAME", "Europe/Moscow")),
         exclude_status_regex=env("EXCLUDE_STATUS_REGEX", r"отказ"),
         closed_status_regex=env("CLOSED_STATUS_REGEX", r"стал ментором|оплатил пакет|240"),
