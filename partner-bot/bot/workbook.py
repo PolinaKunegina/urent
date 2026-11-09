@@ -145,6 +145,9 @@ class PartnerTab:
     month_col: int | None = None                     # колонка подписи «Мой месяц»
     plan_col: int | None = None                      # колонка «Дата» блока часов
     time_col: int | None = None                      # «Время, мин» (нет — вкладка старого макета)
+    month_cols: dict = field(default_factory=dict)   # категория -> колонка её подписи в «Мой месяц»
+    month_ok: bool = True                            # подписи стоят подряд, как задумано
+    month_end: int = 0                               # колонка за последней ячейкой блока
     next_what_col: int | None = None
 
     def history_full_soon(self) -> bool:
@@ -196,18 +199,29 @@ def parse_partner_tabs(xlsx: bytes, sandbox: bool = False) -> list[PartnerTab]:
 
 
 def _parse_month(tab: PartnerTab, top: list[tuple]) -> None:
-    """Блок «Мой месяц»: подпись в строке 1, цели строкой ниже, результаты ещё ниже."""
+    """Блок «Мой месяц»: подпись в строке 1, цели строкой ниже, результаты ещё ниже.
+
+    Категорию ищем по её названию: если в блок вставили колонку, цифры всё равно читаются
+    из-под своих подписей, а month_ok = False говорит, что блок пора собрать обратно."""
     for r, row in enumerate(top):
         for c, v in enumerate(row):
             if _norm(v).startswith("мой месяц"):
                 tab.month_col = c
-                for k, (key, _, _) in enumerate(RESULT_CATS):
-                    get = lambda rr: top[rr][c + 1 + k] if rr < len(top) and c + 1 + k < len(top[rr]) else None
+                labels = {_norm(x): i for i, x in enumerate(row) if i > c and x not in (None, "")}
+                ok = True
+                for k, (key, title, _) in enumerate(RESULT_CATS):
+                    col = labels.get(_norm(title), c + 1 + k)
+                    ok = ok and col == c + 1 + k
+                    tab.month_cols[key] = col
+                    get = lambda rr: top[rr][col] if rr < len(top) and col < len(top[rr]) else None
                     g, res = _num(get(r + 1)), _num(get(r + 2))
                     if g is not None:
                         tab.goals[key] = g
                     if res is not None:
                         tab.results[key] = res
+                done = labels.get("выполнено")
+                tab.month_ok = ok and done in (None, c + 1 + len(RESULT_CATS))
+                tab.month_end = max([*tab.month_cols.values(), done or 0]) + 1
                 return
 
 

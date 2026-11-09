@@ -415,3 +415,46 @@ def test_expand_history_triples():
     heads = [v["userEnteredValue"]["stringValue"] for v in sh.reqs[1]["updateCells"]["rows"][0]["values"]]
     assert heads == ["Дата 6-го касания", "Формат (этап)", "Мин", "Дата 7-го касания", "Формат (этап)", "Мин"]
     assert "range=AF4" in json.dumps(sh.reqs, ensure_ascii=False)
+
+
+def test_month_block_repaired_after_column_insert():
+    """Так выглядел блок после вставки колонки «Мин»: пустая колонка между 240 и продуктом."""
+    from bot.setup_sheet import month_repair_requests
+    from bot.workbook import CRM_HEADERS
+    wb = Workbook()
+    ws = wb.active
+    ws.title = "Сдвинутый"
+    for i, v in enumerate(["Мой месяц: ноябрь", "Новые контакты", "Партнёры 95", "Партнёры 240", "",
+                           "Маленький продукт", "Выполнено"]):
+        ws.cell(1, 8 + i, v)
+    for i, v in enumerate([3, 5, 2, None, 4]):
+        ws.cell(2, 9 + i, v)
+    for i, h in enumerate(CRM_HEADERS + ["", "Дата"]):
+        ws.cell(4, i + 1, h)
+    buf = io.BytesIO()
+    wb.save(buf)
+    tab = parse_partner_tabs(buf.getvalue())[0]
+    assert tab.goals == {"leads": 3, "c95": 5, "c240": 2, "c5000": 4} and not tab.month_ok
+    prot = [{"protectedRangeId": 1, "description": "bot:заголовки", "editors": {"users": ["bot@x"]},
+             "range": {"startRowIndex": 1, "endRowIndex": 2, "startColumnIndex": 0, "endColumnIndex": 8}},
+            {"protectedRangeId": 2, "description": "bot:факт-формулы",
+             "range": {"startRowIndex": 4, "endRowIndex": 104}}]
+    reqs = month_repair_requests(tab, 9, TODAY, ";", prot, 38)
+    rows = {r["updateCells"]["start"]["rowIndex"]: [v.get("userEnteredValue", {}) for v in r["updateCells"]["rows"][0]["values"]]
+            for r in reqs if "updateCells" in r and "start" in r["updateCells"]}
+    assert [v.get("stringValue") for v in rows[0]] == ["Мой месяц: ноябрь", "Новые контакты", "Партнёры 95",
+                                                       "Партнёры 240", "Маленький продукт", "Выполнено"]
+    assert [v.get("numberValue") for v in rows[1][1:5]] == [3, 5, 2, 4]
+    assert rows[2][5]["formulaValue"] == '=IF(SUM(I2:L2)=0;"";SUM(I3:L3)/SUM(I2:L2))'
+    clear = next(r["updateCells"]["range"] for r in reqs if "updateCells" in r and "range" in r["updateCells"])
+    assert (clear["startColumnIndex"], clear["endColumnIndex"]) == (13, 14)        # старый «Выполнено» в N
+    text = json.dumps(reqs)
+    assert '"protectedRangeId": 1' in text and '"protectedRangeId": 2' not in text
+    assert text.count("addProtectedRange") == 4
+    # собранный блок читается как правильный
+    for i, v in enumerate(["Мой месяц: ноябрь", "Новые контакты", "Партнёры 95", "Партнёры 240",
+                           "Маленький продукт", "Выполнено", None]):
+        ws.cell(1, 8 + i).value = v
+    buf = io.BytesIO()
+    wb.save(buf)
+    assert parse_partner_tabs(buf.getvalue())[0].month_ok

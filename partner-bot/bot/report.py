@@ -15,8 +15,8 @@ from .config import Config, load_config
 from .network import (PartnerStats, compute_network, render_morning, render_weekly,
                       summary_rows)
 from .partners import Directory
-from .setup_sheet import (Sheet, ensure_structure, expand_history, rewrite_guide, upgrade_time_stage,
-                          write_summary)
+from .setup_sheet import (Sheet, ensure_structure, expand_history, repair_month_block, rewrite_guide,
+                          upgrade_time_stage, write_summary)
 from .sheets import fetch_xlsx, google_session, parse_partners
 from .workbook import parse_partner_tabs
 
@@ -107,6 +107,10 @@ def sync(cfg: Config, net: Network, session=None) -> list[str]:
                     log.exception("Не удалось добавить время и этап на вкладку %s", t.name)
                     warnings.append(f"Вкладка {t.name}: не добавились время и этап ({exc.__class__.__name__})")
                     continue
+                try:
+                    repair_month_block(sh, t, b.gids[t.name], net.today)
+                except Exception:
+                    log.exception("Не удалось собрать «Мой месяц» на вкладке %s", t.name)
                 if t.history_full_soon():      # колонки касаний заканчиваются — добавляем новые
                     expand_history(sh, t, b.gids[t.name])
             if upgraded:                          # инструкция — под новые колонки

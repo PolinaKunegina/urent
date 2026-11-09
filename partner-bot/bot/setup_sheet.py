@@ -401,6 +401,55 @@ def time_stage_upgrade_requests(tab, gid: int, today: date, service_email: str =
     return reqs
 
 
+def month_repair_requests(tab, gid: int, today: date, sep: str, protected: list[dict],
+                          width: int) -> list[dict]:
+    """Собирает «Мой месяц» обратно, если в блок попала чужая колонка: подписи, цели и результаты
+    встают подряд от подписи блока, лишние ячейки справа очищаются, шапка защищается заново."""
+    from .workbook import RESULT_CATS, header_protection_ranges
+    c0 = tab.month_col
+    n = len(RESULT_CATS)
+    vals = month_block_values(today, sep)
+    vals[1][1:1 + n] = [tab.goals.get(k, "") for k, _, _ in RESULT_CATS]
+    vals[2][1:1 + n] = [tab.results.get(k, 0) for k, _, _ in RESULT_CATS]
+    reqs = [_text_row(gid, r, c0, row) for r, row in enumerate(vals)]
+    reqs += month_block_requests(gid)
+    extra0, extra1 = c0 + n + 2, max(tab.month_end, c0 + n + 2)
+    if extra1 > extra0:              # хвост старого блока справа — пустой и без заливки
+        reqs.append({"updateCells": {"range": {"sheetId": gid, "startRowIndex": 0, "endRowIndex": 3,
+                                               "startColumnIndex": extra0, "endColumnIndex": extra1},
+                                     "fields": "userEnteredValue,userEnteredFormat.backgroundColor"}})
+    for c in range(c0 + 1, c0 + n + 2):   # узкие колонки (минуты) под подписями блока — пошире
+        reqs.append({"updateDimensionProperties": {"range": {"sheetId": gid, "dimension": "COLUMNS",
+                                                             "startIndex": c, "endIndex": c + 1},
+                                                   "properties": {"pixelSize": 100}, "fields": "pixelSize"}})
+    editors = None
+    for pr in protected:
+        rg = pr.get("range", {})
+        if pr.get("description") == "bot:заголовки" and rg.get("startRowIndex", 0) < 4 \
+                and rg.get("endRowIndex", 99) <= 4:
+            reqs.append({"deleteProtectedRange": {"protectedRangeId": pr["protectedRangeId"]}})
+            editors = editors or pr.get("editors")
+    if editors:
+        reqs += [{"addProtectedRange": {"protectedRange": {
+            "range": part, "description": "bot:заголовки", "warningOnly": False, "editors": editors}}}
+            for part in header_protection_ranges(gid, width)]
+    return reqs
+
+
+def repair_month_block(sh: Sheet, tab, gid: int, today: date) -> bool:
+    if tab.month_col is None or tab.month_ok:
+        return False
+    from .workbook import PLAN_HEADERS
+    r = sh.s.get(f"{API}/{sh.id}", params={"fields": "sheets(properties.sheetId,protectedRanges)"}, timeout=30)
+    r.raise_for_status()
+    protected = next((x.get("protectedRanges", []) for x in r.json().get("sheets", [])
+                      if x["properties"]["sheetId"] == gid), [])
+    width = (tab.plan_col or 0) + len(PLAN_HEADERS)
+    sh.batch(month_repair_requests(tab, gid, today, sh.sep(), protected, width))
+    log.info("Вкладка «%s»: блок «Мой месяц» собран заново", tab.name)
+    return True
+
+
 def upgrade_time_stage(sh: Sheet, tab, gid: int, today: date) -> bool:
     if not needs_time_stage(tab):
         return False
