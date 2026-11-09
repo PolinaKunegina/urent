@@ -26,18 +26,31 @@ from .sheets import Lead, Touch, _clean, _norm, to_date
 HEADER_ROW = 4                 # строка заголовков (1-based)
 FIRST_ROW = HEADER_ROW + 1
 CLIENT_ROWS = 100              # сколько строк под клиентов
+TIME_HEADER, STAGE_HEADER = "Время, мин", "Этап"
+FMT_HEADER, MIN_HEADER = "Формат (этап)", "Мин"
+
+
+def touch_headers(n: int) -> list[str]:
+    return [f"Дата {n}-го касания", FMT_HEADER, MIN_HEADER]
+
+
 CRM_HEADERS = [
     "№", "Имя клиента", "Откуда пришёл",
-    "Следующий шаг: дата", "Следующий шаг: что",
+    "Следующий шаг: дата", "Следующий шаг: что", TIME_HEADER, STAGE_HEADER,
     "Текущий статус", "Что происходит",
-    "Дата 1-го касания", "Формат", "Дата 2-го касания", "Формат", "Дата 3-го касания", "Формат",
-    "Дата 4-го касания", "Формат", "Дата 5-го касания", "Формат",
+    *[h for n in range(1, 6) for h in touch_headers(n)],
 ]
-COL_NAME, COL_SOURCE, COL_NEXT_DATE, COL_NEXT_WHAT, COL_STATUS, COL_DESC = 1, 2, 3, 4, 5, 6
-TOUCH_COLS = [(n, 7 + 2 * (n - 1), 8 + 2 * (n - 1)) for n in range(1, 6)]   # история: (n, дата, формат)
-DATE_COLS = [d for _, d, _ in TOUCH_COLS]
+COL_NAME, COL_SOURCE, COL_NEXT_DATE, COL_NEXT_WHAT = 1, 2, 3, 4
+COL_TIME, COL_STAGE, COL_STATUS, COL_DESC = 5, 6, 7, 8
+HIST_COL0 = 9                  # J — первая «Дата касания»
+# история: (n, дата, «формат (этап)», минуты)
+TOUCH_COLS = [(n, HIST_COL0 + 3 * (n - 1), HIST_COL0 + 3 * (n - 1) + 1, HIST_COL0 + 3 * (n - 1) + 2)
+              for n in range(1, 6)]
+DATE_COLS = [t[1] for t in TOUCH_COLS]
+STAGES = ["Привлечение", "Прогрев", "Закрытие"]
+STAGE_OF = {"attract": "привлечение", "warmup": "прогрев", "close": "закрытие"}
 
-PLAN_COL0 = len(CRM_HEADERS) + 1   # колонка S — начало блока часов (R — узкий разделитель)
+PLAN_COL0 = len(CRM_HEADERS) + 1   # колонка Z — начало блока часов (Y — узкий разделитель)
 PLAN_HEADERS = [
     "Дата",
     "Привлечение — план, ч", "Прогрев — план, ч", "Закрытие — план, ч", "План: что буду делать",
@@ -73,7 +86,7 @@ RESULT_CATS = [   # (ключ, подпись, по какому статусу 
     ("c240", "Партнёры 240", r"(?<!\d)240(?!\d)"),
     ("c5000", "Маленький продукт", r"маленький продукт|купил продукт|интенсив|5000"),   # любая покупка, кроме оргвзноса
 ]
-MONTH_COL = 5                  # F: подписи блока; G..J — категории; K — % выполнения
+MONTH_COL = 7                  # H: подписи блока; I..L — категории; M — % выполнения
 MONTHS_NOM = ["январь", "февраль", "март", "апрель", "май", "июнь", "июль", "август", "сентябрь",
               "октябрь", "ноябрь", "декабрь"]
 
@@ -93,7 +106,12 @@ def new_leads_in_month(tab, today: date) -> int:
     return n
 
 
-SERVICE_TABS = {"Оглавление", "Сводка", "Партнёры", "Инструкция"}
+SERVICE_TABS = {"Оглавление", "Сводка", "Партнёры", "Инструкция", "Итоги недели"}
+
+HINT_CLIENTS = ("Следующий шаг сам попадает в историю вместе с минутами и этапом. "
+                "Красный — нет шага на 7 дней.")
+HINT_HOURS = ("Факт и людей считает таблица из минут у клиентов. Вы пишете план в голубой строке (завтра) "
+              "и «Факт: что сделал(а)» в зелёной (сегодня). Серые цифры — уже назначенные шаги будущих дней.")
 
 
 @dataclass
@@ -104,6 +122,7 @@ class DayPlan:
     fact_note: str = ""                                       # «Факт: что сделал(а)»
     people: dict[str, float] = field(default_factory=dict)   # сколько людей в работе (факт)
     plan_note: str = ""                                       # «План: что буду делать»
+    row: int = 0                                              # номер строки на листе (1-based)
 
     @property
     def has_plan(self) -> bool:
@@ -120,11 +139,13 @@ class PartnerTab:
     clients: list[Lead] = field(default_factory=list)
     days: dict[date, DayPlan] = field(default_factory=dict)
     sandbox: bool = False
-    touch_cols: list = field(default_factory=list)   # фактические колонки истории [(n, дата, формат)]
+    touch_cols: list = field(default_factory=list)   # колонки истории [(n, дата, формат, минуты|None)]
     goals: dict = field(default_factory=dict)        # категория -> цель месяца (вписывает партнёр)
     results: dict = field(default_factory=dict)      # категория -> результат месяца (пишет бот)
     month_col: int | None = None                     # колонка подписи «Мой месяц»
     plan_col: int | None = None                      # колонка «Дата» блока часов
+    time_col: int | None = None                      # «Время, мин» (нет — вкладка старого макета)
+    next_what_col: int | None = None
 
     def history_full_soon(self) -> bool:
         """У кого-то из клиентов осталось меньше двух свободных пар касаний."""
@@ -205,7 +226,8 @@ def _parse_rows(title: str, rows: list[tuple], sandbox: bool) -> PartnerTab:
         m = re.match(r"дата\s*(\d+)", h)
         if m:
             f = i + 1 if i + 1 < len(head) and head[i + 1].startswith("формат") else None
-            touch_cols.append((int(m.group(1)), i, f))
+            mn = i + 2 if f is not None and i + 2 < len(head) and head[i + 2].startswith("мин") else None
+            touch_cols.append((int(m.group(1)), i, f, mn))
     c_date = next((i for i, h in enumerate(head) if h == "дата"), None)
     plan_cols = {p: find(f"{PROCESS_NAMES[p]} — план") for p in PROCESSES}
     fact_cols = {p: find(f"{PROCESS_NAMES[p]} — факт") for p in PROCESSES}
@@ -216,17 +238,19 @@ def _parse_rows(title: str, rows: list[tuple], sandbox: bool) -> PartnerTab:
     def cell(row, i):
         return row[i] if i is not None and i < len(row) else None
 
-    tab = PartnerTab(name=title, sandbox=sandbox, touch_cols=touch_cols, plan_col=c_date)
+    tab = PartnerTab(name=title, sandbox=sandbox, touch_cols=touch_cols, plan_col=c_date,
+                     time_col=find("время"), next_what_col=c_next_what)
     for offset, row in enumerate(rows[1:], 1):
         r_num = HEADER_ROW + offset
         name = _clean(cell(row, c_name))
         if name:
             touches = []
-            for n, d_i, f_i in touch_cols:
+            for n, d_i, f_i, m_i in touch_cols:
                 raw, fmt = cell(row, d_i), cell(row, f_i)
                 if raw in (None, "") and fmt in (None, ""):
                     continue
-                touches.append(Touch(n=n, when=to_date(raw), raw=_clean(raw), fmt=_clean(fmt)))
+                touches.append(Touch(n=n, when=to_date(raw), raw=_clean(raw), fmt=_clean(fmt),
+                                     minutes=_num(cell(row, m_i))))
             tab.clients.append(Lead(row=r_num, number="", name=name,
                                     source=_clean(cell(row, c_src)),
                                     status=_clean(cell(row, c_status)),
@@ -241,7 +265,7 @@ def _parse_rows(title: str, rows: list[tuple], sandbox: bool) -> PartnerTab:
             plan_note, fact_note = _clean(cell(row, c_plan_note)), _clean(cell(row, c_fact_note))
             if c_plan_note is None and fact_note.lower().startswith("план"):   # старый общий комментарий
                 plan_note, fact_note = fact_note, ""
-            tab.days[d] = DayPlan(d, plan, fact, fact_note, people, plan_note)
+            tab.days[d] = DayPlan(d, plan, fact, fact_note, people, plan_note, row=r_num)
     return tab
 
 
@@ -377,6 +401,28 @@ def month_block_requests(sheet_id: int) -> list[dict]:
     ]
 
 
+def fact_formulas(r: int, plan_col: int, hist0: int = HIST_COL0, sep: str = ";") -> list[str]:
+    """Формулы строки дня r (1-based): часы по трём процессам из минут у клиентов, потом людей.
+
+    История — тройки «дата / формат (этап) / мин». Берём три одинаковых диапазона, сдвинутых
+    на колонку: даты, форматы, минуты — так SUMIFS складывает минуты касаний этого дня с нужным
+    этапом. Диапазоны доходят до разделителя и чуть дальше, чтобы новые колонки касаний,
+    вставленные перед разделителем, сами попадали в формулы.
+    """
+    sep_col = plan_col - 1
+    a, b = FIRST_ROW, HEADER_ROW + CLIENT_ROWS
+
+    def rng(c0, c1):
+        return f"${col_letter(c0)}${a}:${col_letter(c1)}${b}"
+    dates, fmts, mins = rng(hist0, sep_col), rng(hist0 + 1, sep_col + 1), rng(hist0 + 2, sep_col + 2)
+    d = f"${col_letter(plan_col)}{r}"
+    hours = [fx(f'=IFERROR(1/(1/ROUND(SUMIFS({mins},{dates},{d},{fmts},"*({STAGE_OF[p]})*")/60,2)),"")', sep)
+             for p in PROCESSES]
+    people = [fx(f'=IFERROR(1/(1/COUNTIFS({dates},{d},{fmts},"*({STAGE_OF[p]})*")),"")', sep)
+              for p in PROCESSES]
+    return hours + people
+
+
 def partner_tab_values(name: str, start: date, end: date, clients: list[dict] | None = None,
                        sep: str = ";", gid: int | None = None,
                        days: dict | None = None) -> list[list]:
@@ -384,13 +430,12 @@ def partner_tab_values(name: str, start: date, end: date, clients: list[dict] | 
     width = PLAN_COL0 + len(PLAN_HEADERS)
     grid = [["" for _ in range(width)] for _ in range(HEADER_ROW + CLIENT_ROWS)]
     grid[0][0] = f"Клиенты — {name}"
-    grid[1][0] = "Следующий шаг сам попадает в историю. Красный — нет шага на 7 дней."
+    grid[1][0] = HINT_CLIENTS
     for row, cells in enumerate(month_block_values(start, sep)):
         for k, v in enumerate(cells):
             grid[row][MONTH_COL + k] = v
     grid[0][PLAN_COL0] = "Мои часы по дням"
-    grid[1][PLAN_COL0] = ("Вечером: в зелёной строке (сегодня) — факт рядом с планом, "
-                          "в голубой (завтра) — план. Ничего не стирайте: план и факт стоят рядом.")
+    grid[1][PLAN_COL0] = HINT_HOURS
     for i, h in enumerate(CRM_HEADERS):
         grid[HEADER_ROW - 1][i] = h
     for i, h in enumerate(PLAN_HEADERS):
@@ -406,15 +451,18 @@ def partner_tab_values(name: str, start: date, end: date, clients: list[dict] | 
         pl = f"{col_letter(PLAN_COL0 + P_PLAN)}{r}:{col_letter(PLAN_COL0 + P_PLAN + 2)}{r}"
         fa = f"{col_letter(PLAN_COL0 + P_FACT)}{r}:{col_letter(PLAN_COL0 + P_FACT + 2)}{r}"
         row[PLAN_COL0 + P_PCT] = fx(f'=IF(OR(SUM({pl})=0,COUNT({fa})=0),"",SUM({fa})/SUM({pl}))', sep)
+        formulas = fact_formulas(r, PLAN_COL0, HIST_COL0, sep)
+        for i in range(6):
+            row[PLAN_COL0 + P_FACT + i] = formulas[i]
         dp = (days or {}).get(d)
         if dp:
             for i, p in enumerate(PROCESSES):
                 if p in dp.plan:
                     row[PLAN_COL0 + P_PLAN + i] = dp.plan[p]
-                if p in dp.fact:
-                    row[PLAN_COL0 + P_FACT + i] = dp.fact[p]
-                if p in dp.people:
-                    row[PLAN_COL0 + P_PEOPLE + i] = dp.people[p]
+            if dp.fact or dp.people:      # факт, внесённый руками до формул, сохраняем как есть
+                for i, p in enumerate(PROCESSES):
+                    row[PLAN_COL0 + P_FACT + i] = dp.fact.get(p, "")
+                    row[PLAN_COL0 + P_PEOPLE + i] = dp.people.get(p, "")
             row[PLAN_COL0 + P_PLAN_NOTE] = dp.plan_note
             row[PLAN_COL0 + P_FACT_NOTE] = dp.fact_note
     for k, c in enumerate(clients or []):
@@ -425,11 +473,14 @@ def partner_tab_values(name: str, start: date, end: date, clients: list[dict] | 
         row[COL_NEXT_WHAT] = c.get("next_what", "")
         row[COL_STATUS] = c.get("status", "")
         row[COL_DESC] = c.get("description", "")
+        row[COL_TIME] = c.get("minutes", "")
+        row[COL_STAGE] = c.get("stage", "")
         for t in c.get("touches", []):
             slot = next((tc for tc in TOUCH_COLS if tc[0] == t["n"]), None)
             if slot:
                 row[slot[1]] = t["date"]
                 row[slot[2]] = t.get("fmt", "")
+                row[slot[3]] = "" if t.get("minutes") is None else t["minutes"]
     return grid
 
 
@@ -478,14 +529,15 @@ def partner_tab_format_requests(sheet_id: int, sep: str = ";", service_email: st
         {"repeatCell": {"range": rng(0, 1, 0, PLAN_COL0 + plan_w), "cell": {"userEnteredFormat": {
             "textFormat": {"bold": True, "fontSize": 13}}}, "fields": "userEnteredFormat.textFormat"}},
         fill(rng(h0, HEADER_ROW, 0, crm_w), HEAD_BG, bold=True, wrap=True),
-        fill(rng(h0, HEADER_ROW, COL_NEXT_DATE, COL_NEXT_WHAT + 1), NEXT_BG, bold=True, wrap=True),
+        fill(rng(h0, HEADER_ROW, COL_NEXT_DATE, COL_STAGE + 1), NEXT_BG, bold=True, wrap=True),
         fill(rng(h0, HEADER_ROW, PLAN_COL0, PLAN_COL0 + plan_w), PLAN_BG, bold=True, wrap=True),
         fill(rng(f0, last, 1, crm_w), YELLOW),
         fill(rng(f0, last, PLAN_COL0 + 1, PLAN_COL0 + plan_w), YELLOW),
         date_fmt(rng(f0, last, COL_NEXT_DATE, COL_NEXT_DATE + 1)),
         date_fmt(rng(f0, last, PLAN_COL0, PLAN_COL0 + 1)),
         width(0, 1, 40), width(1, 2, 190), width(2, 3, 140), width(3, 4, 110), width(4, 5, 190),
-        width(5, 6, 170), width(6, 7, 260), width(7, crm_w, 100), width(crm_w, crm_w + 1, 24),
+        width(COL_STATUS, COL_STATUS + 1, 170), width(COL_DESC, COL_DESC + 1, 260),
+        width(crm_w, crm_w + 1, 24),
         width(PLAN_COL0, PLAN_COL0 + 1, 95), width(PLAN_COL0 + P_PLAN, PLAN_COL0 + P_PLAN_NOTE, 95),
         width(PLAN_COL0 + P_PLAN_NOTE, PLAN_COL0 + P_PLAN_NOTE + 1, 220),
         width(PLAN_COL0 + P_FACT, PLAN_COL0 + P_PEOPLE, 95),
@@ -509,10 +561,7 @@ def partner_tab_format_requests(sheet_id: int, sep: str = ";", service_email: st
             "showCustomUi": True, "strict": False}}},
         *[{"setDataValidation": {"range": rng(f0, last, PLAN_COL0 + c0, PLAN_COL0 + c0 + 3), "rule": {
             "condition": {"type": "NUMBER_GREATER_THAN_EQ", "values": [{"userEnteredValue": "0"}]},
-            "inputMessage": "Часы числом, например 1,5", "strict": True}}} for c0 in (P_PLAN, P_FACT)],
-        {"setDataValidation": {"range": rng(f0, last, PLAN_COL0 + P_PEOPLE, PLAN_COL0 + P_FACT_NOTE), "rule": {
-            "condition": {"type": "NUMBER_GREATER_THAN_EQ", "values": [{"userEnteredValue": "0"}]},
-            "inputMessage": "Сколько людей было в работе по этому процессу сегодня", "strict": True}}},
+            "inputMessage": "Часы числом, например 1,5", "strict": True}}} for c0 in (P_PLAN,)],
         date_rule(COL_NEXT_DATE, "Когда следующий шаг? Выберите дату в календаре (двойной клик)"),
         {"addConditionalFormatRule": {"index": 0, "rule": {
             "ranges": [rng(f0, last, COL_NAME, COL_NAME + 1), rng(f0, last, COL_NEXT_DATE, COL_NEXT_DATE + 1)],
@@ -538,4 +587,65 @@ def partner_tab_format_requests(sheet_id: int, sep: str = ";", service_email: st
             reqs.append({"addProtectedRange": {"protectedRange": {
                 "range": r, "description": "bot:заголовки", "warningOnly": False,
                 "editors": {"users": [service_email]}}}})
+    reqs += time_stage_requests(sheet_id, PLAN_COL0, TOUCH_COLS, service_email, sep)
+    return reqs
+
+
+def time_stage_requests(sheet_id: int, plan_col: int, touch_cols: list, service_email: str = "",
+                        sep: str = ";") -> list[dict]:
+    """Колонки «Время, мин» и «Этап», минуты в истории, факт-формулы под защитой и серые будущие дни."""
+    f0, last = FIRST_ROW - 1, HEADER_ROW + CLIENT_ROWS
+
+    def rng(c0, c1, r0=f0, r1=last):
+        return {"sheetId": sheet_id, "startRowIndex": r0, "endRowIndex": r1,
+                "startColumnIndex": c0, "endColumnIndex": c1}
+
+    def width(c, px):
+        return {"updateDimensionProperties": {"range": {"sheetId": sheet_id, "dimension": "COLUMNS",
+                                                        "startIndex": c, "endIndex": c + 1},
+                                              "properties": {"pixelSize": px}, "fields": "pixelSize"}}
+
+    def minutes_rule(c, msg):
+        return {"setDataValidation": {"range": rng(c, c + 1), "rule": {
+            "condition": {"type": "NUMBER_GREATER_THAN_EQ", "values": [{"userEnteredValue": "0"}]},
+            "inputMessage": msg, "strict": True}}}
+
+    fa0, fa1 = plan_col + P_FACT, plan_col + P_FACT_NOTE      # факт, ч ×3 и людей ×3
+    tm, stg = col_letter(COL_TIME), col_letter(COL_STAGE)
+    reqs = [
+        width(COL_TIME, 75), width(COL_STAGE, 120),
+        {"repeatCell": {"range": rng(COL_TIME, COL_STAGE + 1, HEADER_ROW - 1, HEADER_ROW), "cell": {
+            "userEnteredFormat": {"backgroundColor": NEXT_BG, "textFormat": {"bold": True},
+                                  "wrapStrategy": "WRAP", "verticalAlignment": "MIDDLE"}},
+            "fields": "userEnteredFormat.backgroundColor,userEnteredFormat.textFormat.bold,"
+                      "userEnteredFormat.wrapStrategy,userEnteredFormat.verticalAlignment"}},
+        {"repeatCell": {"range": rng(COL_TIME, COL_STAGE + 1), "cell": {"userEnteredFormat": {
+            "backgroundColor": YELLOW, "numberFormat": {"type": "NUMBER", "pattern": "0"}}},
+            "fields": "userEnteredFormat.backgroundColor,userEnteredFormat.numberFormat"}},
+        minutes_rule(COL_TIME, "Сколько минут займёт этот шаг (или занял): 15, 30, 60"),
+        {"setDataValidation": {"range": rng(COL_STAGE, COL_STAGE + 1), "rule": {
+            "condition": {"type": "ONE_OF_LIST", "values": [{"userEnteredValue": x} for x in STAGES]},
+            "inputMessage": "На каком этапе человек: привлечение, прогрев или закрытие",
+            "showCustomUi": True, "strict": True}}},
+        {"addConditionalFormatRule": {"index": 0, "rule": {   # минуты есть, этапа нет — время не посчитается
+            "ranges": [rng(COL_STAGE, COL_STAGE + 1)],
+            "booleanRule": {"condition": {"type": "CUSTOM_FORMULA", "values": [
+                {"userEnteredValue": fx(f'=AND(${tm}{FIRST_ROW}<>"",${stg}{FIRST_ROW}="")', sep)}]},
+                "format": {"backgroundColor": RED_BG}}}}},
+        {"addConditionalFormatRule": {"index": 0, "rule": {   # будущие дни: это назначенные шаги, не факт
+            "ranges": [rng(fa0, fa1)],
+            "booleanRule": {"condition": {"type": "CUSTOM_FORMULA", "values": [
+                {"userEnteredValue": f"=${col_letter(plan_col)}{FIRST_ROW}>TODAY()"}]},
+                "format": {"textFormat": {"foregroundColor": {"red": 0.6, "green": 0.6, "blue": 0.6},
+                                          "italic": True}}}}}},
+    ]
+    for t in touch_cols:
+        if len(t) > 3 and t[3] is not None:
+            reqs += [width(t[2], 150), width(t[3], 50), minutes_rule(t[3], "Минуты этого касания")]
+        reqs.append(width(t[1], 100))
+    reqs.append({"setDataValidation": {"range": rng(fa0, fa1)}})   # в формулах проверка не нужна
+    if service_email:
+        reqs.append({"addProtectedRange": {"protectedRange": {
+            "range": rng(fa0, fa1), "description": "bot:факт-формулы", "warningOnly": False,
+            "editors": {"users": [service_email]}}}})
     return reqs

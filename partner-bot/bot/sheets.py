@@ -26,6 +26,7 @@ class Touch:
     when: date | None      # распознанная дата
     raw: str               # как написано в ячейке
     fmt: str = ""          # «Формат» рядом с датой
+    minutes: float | None = None   # «Мин» — сколько заняло касание
 
 
 @dataclass

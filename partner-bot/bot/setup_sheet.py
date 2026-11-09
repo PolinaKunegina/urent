@@ -293,8 +293,8 @@ def rebuild_partner_tabs(session, spreadsheet_id: str, today: date, only: list[s
             clients.append({
                 "name": l.name, "source": l.source, "status": l.status, "description": l.description,
                 "next_date": l.next_date.isoformat() if l.next_date else "", "next_what": l.next_what,
-                "touches": [{"n": x.n, "date": x.when.isoformat() if x.when else x.raw, "fmt": x.fmt}
-                            for x in l.touches]})
+                "touches": [{"n": x.n, "date": x.when.isoformat() if x.when else x.raw, "fmt": x.fmt,
+                             "minutes": x.minutes} for x in l.touches]})
         start = min(t.days) if t.days else today
         tmp = f"_новая {t.name}"
         new_id = create_partner_tab(sh, t.name, start, clients, t.days, tab_title=tmp)
@@ -306,37 +306,109 @@ def rebuild_partner_tabs(session, spreadsheet_id: str, today: date, only: list[s
     return done
 
 
-HISTORY_ADD = 5   # сколько пар касаний добавлять за раз
+HISTORY_ADD = 5   # сколько касаний добавлять за раз
 
 
 def expand_history(sh: Sheet, tab, gid: int, add: int = HISTORY_ADD) -> None:
-    """Добавляет пары «Дата N-го касания / Формат» после последней; блок часов сдвигается вправо."""
-    from .workbook import FIRST_ROW, HEADER_ROW, CLIENT_ROWS, COL_NEXT_DATE
-    last_n, _, last_fmt = tab.touch_cols[-1]
-    ins = last_fmt + 1
-    sh.batch([{"insertDimension": {"range": {"sheetId": gid, "dimension": "COLUMNS",
-                                             "startIndex": ins, "endIndex": ins + 2 * add},
-                                   "inheritFromBefore": True}}])
+    """Добавляет касания («Дата / Формат (этап) / Мин») после последнего; блок часов сдвигается вправо.
+
+    Вставка идёт прямо перед разделителем, поэтому диапазоны формул факта расширяются сами."""
+    from .workbook import FIRST_ROW, HEADER_ROW, CLIENT_ROWS, COL_NEXT_DATE, touch_headers
+    last = tab.touch_cols[-1]
+    triple = len(last) > 3 and last[3] is not None
+    step = 3 if triple else 2
+    ins = (last[3] if triple else last[2]) + 1
     heads = []
     for k in range(add):
-        heads += [f"Дата {last_n + k + 1}-го касания", "Формат"]
-    sh.put(f"'{tab.name}'!{col_letter(ins)}{HEADER_ROW}", [heads], raw=True)
-    reqs = []
+        heads += touch_headers(last[0] + k + 1)[:step] if triple else [f"Дата {last[0] + k + 1}-го касания", "Формат"]
+    reqs = [{"insertDimension": {"range": {"sheetId": gid, "dimension": "COLUMNS",
+                                           "startIndex": ins, "endIndex": ins + step * add},
+                                 "inheritFromBefore": True}},
+            _text_row(gid, HEADER_ROW - 1, ins, heads)]
     for k in range(add):
-        c = ins + 2 * k
+        c = ins + step * k
         rng = {"sheetId": gid, "startRowIndex": FIRST_ROW - 1, "endRowIndex": HEADER_ROW + CLIENT_ROWS,
                "startColumnIndex": c, "endColumnIndex": c + 1}
         reqs.append({"repeatCell": {"range": rng, "cell": {"userEnteredFormat": {
             "numberFormat": {"type": "DATE", "pattern": "dd.mm.yyyy"}}}, "fields": "userEnteredFormat.numberFormat"}})
         reqs.append({"setDataValidation": {"range": rng, "rule": {"condition": {"type": "DATE_IS_VALID"},
                                                                   "strict": True}}})
-    sh.batch(reqs)
+        if triple:
+            mrng = dict(rng, startColumnIndex=c + 2, endColumnIndex=c + 3)
+            reqs.append({"setDataValidation": {"range": mrng, "rule": {"condition": {
+                "type": "NUMBER_GREATER_THAN_EQ", "values": [{"userEnteredValue": "0"}]}, "strict": True}}})
     if tab.plan_col is not None:   # ссылка «→ к моим часам» должна вести на новый адрес
-        new_plan = tab.plan_col + 2 * add
-        sh.batch([link_cell(gid, 0, COL_NEXT_DATE,
-                            [("→ к моим часам", f"#gid={gid}&range={col_letter(new_plan)}{HEADER_ROW}")],
-                            size=12, bold=True)])
-    log.info("Вкладка «%s»: добавлено %d пар касаний", tab.name, add)
+        new_plan = tab.plan_col + step * add
+        reqs.append(link_cell(gid, 0, COL_NEXT_DATE,
+                              [("→ к моим часам", f"#gid={gid}&range={col_letter(new_plan)}{HEADER_ROW}")],
+                              size=12, bold=True))
+    sh.batch(reqs)
+    log.info("Вкладка «%s»: добавлено %d касаний", tab.name, add)
+
+
+def _text_row(gid: int, row: int, col: int, texts: list) -> dict:
+    """updateCells: строка значений; строки, начинающиеся с «=», уходят формулами
+    (formulaValue разбирается в локали таблицы — для ru_RU разделитель «;»)."""
+    def val(x):
+        if x is None or x == "":
+            return {}
+        if isinstance(x, (int, float)):
+            return {"userEnteredValue": {"numberValue": x}}
+        if str(x).startswith("="):
+            return {"userEnteredValue": {"formulaValue": x}}
+        return {"userEnteredValue": {"stringValue": str(x)}}
+    return {"updateCells": {"rows": [{"values": [val(x) for x in texts]}], "fields": "userEnteredValue",
+                            "start": {"sheetId": gid, "rowIndex": row, "columnIndex": col}}}
+
+
+def needs_time_stage(tab) -> bool:
+    """Вкладка старого макета: пары «дата / формат», нет «Время, мин», «что» в колонке E."""
+    from .workbook import COL_NEXT_WHAT
+    return (tab.time_col is None and tab.next_what_col == COL_NEXT_WHAT and tab.plan_col is not None
+            and bool(tab.touch_cols) and all(len(t) < 4 or t[3] is None for t in tab.touch_cols))
+
+
+def time_stage_upgrade_requests(tab, gid: int, today: date, service_email: str = "",
+                                toc_gid: int | None = None, guide_gid: int | None = None,
+                                sep: str = ";") -> list[dict]:
+    """Одним атомарным batchUpdate: «Время, мин» и «Этап» после «Следующий шаг: что», колонка «Мин»
+    после каждого «Формата», формулы факта в блоке часов. Факт, внесённый руками в прошлые дни,
+    остаётся как есть; сегодня и дальше — формулы."""
+    from .workbook import (COL_TIME, FMT_HEADER, HEADER_ROW, HINT_CLIENTS, HINT_HOURS, MIN_HEADER,
+                           P_FACT, STAGE_HEADER, TIME_HEADER, fact_formulas, time_stage_requests)
+    pairs = sorted(tab.touch_cols, key=lambda t: t[1])
+    reqs = [{"insertDimension": {"range": {"sheetId": gid, "dimension": "COLUMNS",
+                                           "startIndex": COL_TIME, "endIndex": COL_TIME + 2},
+                                 "inheritFromBefore": True}}]
+    for _, d, f, *_ in reversed(pairs):          # справа налево — левые индексы не сдвигаются
+        reqs.append({"insertDimension": {"range": {"sheetId": gid, "dimension": "COLUMNS",
+                                                   "startIndex": f + 3, "endIndex": f + 4},
+                                         "inheritFromBefore": True}})
+    new_touch = [(n, d + 2 + k, f + 2 + k, f + 3 + k) for k, (n, d, f, *_) in enumerate(pairs)]
+    plan = tab.plan_col + 2 + len(pairs)
+    reqs.append(_text_row(gid, HEADER_ROW - 1, COL_TIME, [TIME_HEADER, STAGE_HEADER]))
+    for _, _, f, m in new_touch:
+        reqs.append(_text_row(gid, HEADER_ROW - 1, f, [FMT_HEADER, MIN_HEADER]))
+    reqs.append(_text_row(gid, 1, 0, [HINT_CLIENTS]))
+    reqs.append(_text_row(gid, 1, plan, [HINT_HOURS]))
+    hist0 = new_touch[0][1]
+    for dp in sorted(tab.days.values(), key=lambda x: x.day):
+        if not dp.row or (dp.day < today and (dp.fact or dp.people)):
+            continue
+        reqs.append(_text_row(gid, dp.row - 1, plan + P_FACT, fact_formulas(dp.row, plan, hist0, sep)))
+    reqs += time_stage_requests(gid, plan, new_touch, service_email, sep)
+    reqs += partner_links(gid, plan, toc_gid, guide_gid)
+    return reqs
+
+
+def upgrade_time_stage(sh: Sheet, tab, gid: int, today: date) -> bool:
+    if not needs_time_stage(tab):
+        return False
+    tabs = sh.tabs()
+    sh.batch(time_stage_upgrade_requests(tab, gid, today, service_email(), tabs.get(TOC), tabs.get(GUIDE_TAB),
+                                         sh.sep()))
+    log.info("Вкладка «%s»: добавлены время и этап, факт считается формулами", tab.name)
+    return True
 
 
 def add_month_block(sh: Sheet, tab, gid: int, today: date) -> None:

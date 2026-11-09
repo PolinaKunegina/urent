@@ -15,7 +15,8 @@ from .config import Config, load_config
 from .network import (PartnerStats, compute_network, render_morning, render_weekly,
                       summary_rows)
 from .partners import Directory
-from .setup_sheet import Sheet, ensure_structure, expand_history, write_summary
+from .setup_sheet import (Sheet, ensure_structure, expand_history, rewrite_guide, upgrade_time_stage,
+                          write_summary)
 from .sheets import fetch_xlsx, google_session, parse_partners
 from .workbook import parse_partner_tabs
 
@@ -94,9 +95,22 @@ def sync(cfg: Config, net: Network, session=None) -> list[str]:
         try:
             created = ensure_structure(session, b.sheet_id, b.directory, net.today, sandbox=b.sandbox)
             sh = Sheet(session, b.sheet_id)
-            for t in b.tabs:      # колонки касаний заканчиваются — добавляем новые
-                if t.history_full_soon() and t.name in b.gids:
+            upgraded = 0
+            for t in b.tabs:
+                if t.name not in b.gids:
+                    continue
+                try:
+                    if upgrade_time_stage(sh, t, b.gids[t.name], net.today):   # время и этап у клиентов
+                        upgraded += 1
+                        continue
+                except Exception as exc:
+                    log.exception("Не удалось добавить время и этап на вкладку %s", t.name)
+                    warnings.append(f"Вкладка {t.name}: не добавились время и этап ({exc.__class__.__name__})")
+                    continue
+                if t.history_full_soon():      # колонки касаний заканчиваются — добавляем новые
                     expand_history(sh, t, b.gids[t.name])
+            if upgraded:                          # инструкция — под новые колонки
+                rewrite_guide(sh, sandbox=b.sandbox)
             if created:
                 log.info("Новые вкладки: %s", created)
             mine = [s for s in net.stats if s.sandbox == b.sandbox]

@@ -235,10 +235,11 @@ def render_weekly(stats: list[PartnerStats], today: date) -> str:
 def render_evening_chat(stats: list[PartnerStats], today: date) -> str:
     text = ("Коллеги, напоминание 🌿 До 19:00 в таблице:\n"
             "• у каждого клиента — следующий шаг с датой;\n"
-            "• справа — <b>факт за сегодня</b> и <b>план на завтра</b> по часам: привлечение, прогрев, закрытие.")
+            "• у сегодняшних касаний — <b>минуты и этап</b>: из них таблица сама считает факт по часам;\n"
+            "• справа — <b>план на завтра</b>: привлечение, прогрев, закрытие.")
     silent = [s.label for s in stats if not s.today_fact]
     if silent:
-        text += "\n\n🔕 Факт за сегодня ещё не заполнили: " + ", ".join(silent)
+        text += "\n\n🔕 Пока нет минут за сегодня: " + ", ".join(silent)
     return text
 
 
@@ -260,7 +261,8 @@ def render_partner_status(s: PartnerStats, today: date, tab_url: str = "") -> st
     ml = month_line(s.goals, s.results)
     out.append(f"🎯 Месяц (факт/цель): {ml}" if any(s.goals.values())
                else "🎯 Цели на этот месяц не заполнены — впиши их вверху своей вкладки, блок «Мой месяц»")
-    out.append("⏱ Факт за сегодня: " + (_hours_line(s.today_fact) + " ч" if s.today_fact else "не заполнен"))
+    out.append("⏱ Факт за сегодня: " + (_hours_line(s.today_fact) + " ч" if s.today_fact
+                                       else "пока ноль — впиши минуты и этап у сегодняшних касаний"))
     out.append("📝 План на завтра: " + (_hours_line(s.tomorrow_plan) + " ч" if s.tomorrow_plan else "не заполнен"))
     if tab_url:
         out.append(f"Твоя вкладка: {tab_url}")
