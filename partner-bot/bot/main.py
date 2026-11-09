@@ -53,7 +53,7 @@ HELP = (
     "/week — итоги последних 7 дней (сами приходят по четвергам в 15:00)\n"
     "/status — проверка настроек\n"
     "/bindchat — отправить в чате (или теме) партнёров, куда слать напоминания\n"
-    "/pause — пауза рассылок (до завтрашнего полудня или /pause 2026-11-10), /resume — включить\n"
+    "/pause — пауза рассылок: до завтра 12:00, /pause 10.11.2027 — до даты, /pause стоп — без срока; /resume — включить\n"
     "/setsheet ссылка — основная таблица\n"
     "/setsandbox ссылка — таблица-песочница новых партнёров\n"
     "/addpartner Фамилия Имя @ник — добавить новичка в песочницу\n"
@@ -375,21 +375,46 @@ async def cmd_setsandbox(update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> None
     await _set_book(update, ctx, "sandbox_id", sandbox=True)
 
 
+FOREVER = "2099-12-31T23:59"
+
+
+def parse_pause_arg(arg: str, now: datetime) -> datetime | None:
+    """Понимает 2027-11-10, 10.11.2027, 10.11 и слово «всё»/«стоп» (пауза до /resume)."""
+    from datetime import timedelta
+    arg = arg.strip().lower()
+    if not arg:
+        return now.replace(hour=12, minute=0, second=0, microsecond=0, tzinfo=None) + timedelta(days=1)
+    if arg in {"всё", "все", "стоп", "навсегда", "forever"}:
+        return datetime.fromisoformat(FOREVER)
+    m = re.fullmatch(r"(\d{1,2})[./](\d{1,2})(?:[./](\d{2,4}))?", arg)
+    try:
+        if m:
+            d, mo, y = int(m[1]), int(m[2]), m[3]
+            year = (int(y) + 2000 if len(y) == 2 else int(y)) if y else now.year
+            day = datetime(year, mo, d)
+            if not y and day.date() < now.date():
+                day = day.replace(year=year + 1)
+        else:
+            day = datetime.fromisoformat(arg)
+    except ValueError:
+        return None
+    return day.replace(hour=23, minute=59, second=0, microsecond=0, tzinfo=None)
+
+
 async def cmd_pause(update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> None:
-    """/pause — до конца следующего утра; /pause 2026-11-10 — до даты (включительно)."""
+    """/pause — до завтрашнего полудня; /pause 10.11.2027 — до даты включительно; /pause стоп — до /resume."""
     if not _is_manager(ctx, update):
         return await _deny(update)
     cfg = _cfg(ctx)
-    arg = (ctx.args[0] if ctx.args else "").strip()
-    try:
-        until = datetime.fromisoformat(arg).replace(hour=23, minute=59) if arg else \
-            datetime.now(cfg.tz).replace(hour=12, minute=0, second=0, microsecond=0) + __import__("datetime").timedelta(days=1)
-    except ValueError:
-        await update.effective_message.reply_text("Так: /pause или /pause 2026-11-10")
+    until = parse_pause_arg(" ".join(ctx.args or []), datetime.now(cfg.tz))
+    if until is None:
+        await update.effective_message.reply_text(
+            "Так: /pause (до завтра 12:00), /pause 10.11.2027 (до даты) или /pause стоп (пока не скажете /resume)")
         return
     _store(ctx).set_setting("pause_until", until.strftime("%Y-%m-%dT%H:%M"))
+    when = "пока не скажете /resume" if until.year >= 2099 else f"до {until:%d.%m.%Y %H:%M}"
     await update.effective_message.reply_text(
-        f"⏸ Рассылки на паузе до {until:%d.%m %H:%M}: ни сводок, ни напоминаний. Вернуть раньше — /resume")
+        f"⏸ Рассылки на паузе {when}: ни сводок, ни напоминаний. Включить — /resume")
 
 
 async def cmd_resume(update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> None:
@@ -426,7 +451,8 @@ async def cmd_status(update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> None:
     lines.append(f"Сводка в {cfg.report_time:%H:%M}, напоминание в {rt}")
     if _paused(ctx):
         until = store.get_setting("pause_until") or QUIET_UNTIL
-        lines.append(f"⏸ Рассылки на паузе до {until.replace('T', ' ')} — /resume, чтобы включить")
+        shown = "без срока" if until >= FOREVER else "до " + datetime.fromisoformat(until).strftime("%d.%m.%Y %H:%M")
+        lines.append(f"⏸ Рассылки на паузе {shown} — /resume, чтобы включить")
     await _send(ctx, update.effective_chat.id, "\n".join(lines))
 
 
