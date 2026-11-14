@@ -15,8 +15,8 @@ from .config import Config, load_config
 from .network import (PartnerStats, compute_network, render_morning, render_weekly,
                       summary_rows)
 from .partners import Directory
-from .setup_sheet import (Sheet, ensure_structure, expand_history, repair_month_block, rewrite_guide,
-                          upgrade_time_stage, write_summary)
+from .setup_sheet import (Sheet, ensure_structure, expand_history, refresh_stage_criteria,
+                          repair_month_block, rewrite_guide, upgrade_time_stage, write_summary)
 from .sheets import fetch_xlsx, google_session, parse_partners
 from .workbook import parse_partner_tabs
 
@@ -86,6 +86,9 @@ def load_network(cfg: Config, today: date, session=None, local_xlsx: bytes | Non
     return net
 
 
+_CRITERIA_DONE: set[tuple[str, str]] = set()   # (таблица, вкладка) — формулы факта уже обновлены
+
+
 def sync(cfg: Config, net: Network, session=None) -> list[str]:
     """Создаёт вкладки новым партнёрам и обновляет «Сводку». Возвращает предупреждения."""
     warnings = []
@@ -111,6 +114,12 @@ def sync(cfg: Config, net: Network, session=None) -> list[str]:
                     repair_month_block(sh, t, b.gids[t.name], net.today)
                 except Exception:
                     log.exception("Не удалось собрать «Мой месяц» на вкладке %s", t.name)
+                if (b.sheet_id, t.name) not in _CRITERIA_DONE:
+                    try:
+                        refresh_stage_criteria(sh, t)
+                        _CRITERIA_DONE.add((b.sheet_id, t.name))
+                    except Exception:
+                        log.exception("Не удалось обновить формулы факта на вкладке %s", t.name)
                 if t.history_full_soon():      # колонки касаний заканчиваются — добавляем новые
                     expand_history(sh, t, b.gids[t.name])
             if upgraded:                          # инструкция — под новые колонки

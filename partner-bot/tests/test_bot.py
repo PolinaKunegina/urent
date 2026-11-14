@@ -157,8 +157,8 @@ def test_layout_and_formulas():
     assert grid[4][PLAN_COL0 + 12] == '=IF(OR(SUM(AA5:AC5)=0;COUNT(AE5:AG5)=0);"";SUM(AE5:AG5)/SUM(AA5:AC5))'
     # факт: минуты касаний этого дня с нужным этапом; диапазоны сдвинуты на колонку и заходят за разделитель
     assert grid[4][PLAN_COL0 + 6] == ('=IFERROR(1/(1/ROUND(SUMIFS($L$5:$AA$104;$J$5:$Y$104;$Z5;'
-                                      '$K$5:$Z$104;"*(прогрев)*")/60;2));"")')
-    assert grid[5][PLAN_COL0 + 8] == '=IFERROR(1/(1/COUNTIFS($J$5:$Y$104;$Z6;$K$5:$Z$104;"*(привлечение)*"));"")'
+                                      '$K$5:$Z$104;"*прогрев*")/60;2));"")')
+    assert grid[5][PLAN_COL0 + 8] == '=IFERROR(1/(1/COUNTIFS($J$5:$Y$104;$Z6;$K$5:$Z$104;"*привлеч*"));"")'
     assert grid[4][COL_NEXT_DATE] == "2026-11-06" and grid[4][COL_NEXT_WHAT] == "созвон с Антоном"
     from bot.workbook import partner_links
     links = json.dumps(partner_links(77, PLAN_COL0, 1, 2), ensure_ascii=False)
@@ -458,3 +458,16 @@ def test_month_block_repaired_after_column_insert():
     buf = io.BytesIO()
     wb.save(buf)
     assert parse_partner_tabs(buf.getvalue())[0].month_ok
+
+
+def test_stage_matched_by_word_and_old_formulas_rewritten():
+    from bot.setup_sheet import stage_criteria_updates
+    from bot.workbook import PartnerTab, fact_formulas
+    new = fact_formulas(5, 25, 9, ";")
+    assert '"*прогрев*"' in new[1] and '"*привлеч*"' in new[3] and '"*закрыт*"' in new[5]
+    old = [f.replace('"*привлеч*"', '"*(привлечение)*"').replace('"*прогрев*"', '"*(прогрев)*"')
+           .replace('"*закрыт*"', '"*(закрытие)*"') for f in new]
+    tab = PartnerTab(name="Юля", plan_col=25, time_col=5)
+    data = stage_criteria_updates(tab, [old, [1.5, "", "", 3, "", ""], new])
+    assert [d["range"] for d in data] == [f"'Юля'!{c}5" for c in ("AE", "AF", "AG", "AH", "AI", "AJ")]
+    assert [d["values"][0][0] for d in data] == new          # ручные цифры и новые формулы не трогаем

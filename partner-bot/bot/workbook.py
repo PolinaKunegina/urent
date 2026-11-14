@@ -49,6 +49,10 @@ TOUCH_COLS = [(n, HIST_COL0 + 3 * (n - 1), HIST_COL0 + 3 * (n - 1) + 1, HIST_COL
 DATE_COLS = [t[1] for t in TOUCH_COLS]
 STAGES = ["Привлечение", "Прогрев", "Закрытие"]
 STAGE_OF = {"attract": "привлечение", "warmup": "прогрев", "close": "закрытие"}
+# по какому кусочку слова формула узнаёт этап в «Формат (этап)»: скобки не нужны,
+# «Прогрев», «общение прогрев» и «баня (прогрев)» считаются одинаково
+STAGE_MATCH = {"attract": "привлеч", "warmup": "прогрев", "close": "закрыт"}
+OLD_STAGE_CRITERIA = {f'"*({STAGE_OF[p]})*"': f'"*{STAGE_MATCH[p]}*"' for p in STAGE_OF}
 
 PLAN_COL0 = len(CRM_HEADERS) + 1   # колонка Z — начало блока часов (Y — узкий разделитель)
 PLAN_HEADERS = [
@@ -430,9 +434,9 @@ def fact_formulas(r: int, plan_col: int, hist0: int = HIST_COL0, sep: str = ";")
         return f"${col_letter(c0)}${a}:${col_letter(c1)}${b}"
     dates, fmts, mins = rng(hist0, sep_col), rng(hist0 + 1, sep_col + 1), rng(hist0 + 2, sep_col + 2)
     d = f"${col_letter(plan_col)}{r}"
-    hours = [fx(f'=IFERROR(1/(1/ROUND(SUMIFS({mins},{dates},{d},{fmts},"*({STAGE_OF[p]})*")/60,2)),"")', sep)
+    hours = [fx(f'=IFERROR(1/(1/ROUND(SUMIFS({mins},{dates},{d},{fmts},"*{STAGE_MATCH[p]}*")/60,2)),"")', sep)
              for p in PROCESSES]
-    people = [fx(f'=IFERROR(1/(1/COUNTIFS({dates},{d},{fmts},"*({STAGE_OF[p]})*")),"")', sep)
+    people = [fx(f'=IFERROR(1/(1/COUNTIFS({dates},{d},{fmts},"*{STAGE_MATCH[p]}*")),"")', sep)
               for p in PROCESSES]
     return hours + people
 

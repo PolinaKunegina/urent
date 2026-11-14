@@ -450,6 +450,42 @@ def repair_month_block(sh: Sheet, tab, gid: int, today: date) -> bool:
     return True
 
 
+def stage_criteria_updates(tab, formulas: list[list]) -> list[dict]:
+    """Формулы факта со старым условием «(этап)» в скобках → условие по слову этапа.
+    formulas — блок факта (6 колонок) с FORMULA-рендером, с FIRST_ROW."""
+    from .workbook import FIRST_ROW, OLD_STAGE_CRITERIA, P_FACT
+    out = []
+    for i, row in enumerate(formulas):
+        for j, v in enumerate(row):
+            if not (isinstance(v, str) and v.startswith("=")):
+                continue
+            new = v
+            for old, repl in OLD_STAGE_CRITERIA.items():
+                new = new.replace(old, repl)
+            if new != v:
+                out.append({"range": f"'{tab.name}'!{col_letter(tab.plan_col + P_FACT + j)}{FIRST_ROW + i}",
+                            "values": [[new]]})
+    return out
+
+
+def refresh_stage_criteria(sh: Sheet, tab) -> int:
+    """Один раз на вкладку: переписывает условия этапа в формулах факта. Возвращает число ячеек."""
+    from .workbook import CLIENT_ROWS, FIRST_ROW, HEADER_ROW, P_FACT
+    if tab.plan_col is None or tab.time_col is None:
+        return 0
+    c0, c1 = col_letter(tab.plan_col + P_FACT), col_letter(tab.plan_col + P_FACT + 5)
+    rng = f"'{tab.name}'!{c0}{FIRST_ROW}:{c1}{HEADER_ROW + CLIENT_ROWS}"
+    r = sh.s.get(f"{API}/{sh.id}/values/{quote(rng)}", params={"valueRenderOption": "FORMULA"}, timeout=30)
+    r.raise_for_status()
+    data = stage_criteria_updates(tab, r.json().get("values", []))
+    if data:
+        r = sh.s.post(f"{API}/{sh.id}/values:batchUpdate",
+                      json={"valueInputOption": "USER_ENTERED", "data": data}, timeout=60)
+        r.raise_for_status()
+        log.info("Вкладка «%s»: этап в формулах факта узнаётся по слову (%d ячеек)", tab.name, len(data))
+    return len(data)
+
+
 def upgrade_time_stage(sh: Sheet, tab, gid: int, today: date) -> bool:
     if not needs_time_stage(tab):
         return False
