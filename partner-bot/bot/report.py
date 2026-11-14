@@ -16,7 +16,7 @@ from .network import (PartnerStats, compute_network, render_morning, render_week
                       summary_rows)
 from .partners import Directory
 from .setup_sheet import (Sheet, ensure_structure, expand_history, refresh_stage_criteria,
-                          repair_month_block, rewrite_guide, upgrade_time_stage, write_summary)
+                          repair_month_block, rewrite_guide, upgrade_contact, write_summary)
 from .sheets import fetch_xlsx, google_session, parse_partners
 from .workbook import parse_partner_tabs
 
@@ -103,12 +103,12 @@ def sync(cfg: Config, net: Network, session=None) -> list[str]:
                 if t.name not in b.gids:
                     continue
                 try:
-                    if upgrade_time_stage(sh, t, b.gids[t.name], net.today):   # время и этап у клиентов
+                    if upgrade_contact(sh, t, b.gids[t.name]):   # «Контакт (по желанию)» после имени
                         upgraded += 1
                         continue
                 except Exception as exc:
-                    log.exception("Не удалось добавить время и этап на вкладку %s", t.name)
-                    warnings.append(f"Вкладка {t.name}: не добавились время и этап ({exc.__class__.__name__})")
+                    log.exception("Не удалось добавить колонку контакта на вкладку %s", t.name)
+                    warnings.append(f"Вкладка {t.name}: не добавилась колонка контакта ({exc.__class__.__name__})")
                     continue
                 try:
                     repair_month_block(sh, t, b.gids[t.name], net.today)

@@ -147,29 +147,30 @@ def test_layout_and_formulas():
                               clients=[{"name": "Котова Вера", "next_date": "2026-11-06",
                                         "next_what": "созвон с Антоном"}])
     head = grid[3]
-    assert head[1:9] == ["Имя клиента", "Откуда пришёл", "Следующий шаг: дата", "Следующий шаг: что",
-                         "Время, мин", "Этап", "Текущий статус", "Что происходит"]
-    assert head[9:12] == ["Дата 1-го касания", "Формат (этап)", "Мин"]
-    assert head[PLAN_COL0] == "Дата" and PLAN_COL0 == 25 and head[PLAN_COL0 - 1] == ""
+    assert head[1:10] == ["Имя клиента", "Контакт (по желанию)", "Откуда пришёл", "Следующий шаг: дата",
+                          "Следующий шаг: что", "Время, мин", "Этап", "Текущий статус", "Что происходит"]
+    assert head[10:13] == ["Дата 1-го касания", "Формат (этап)", "Мин"]
+    assert head[PLAN_COL0] == "Дата" and PLAN_COL0 == 26 and head[PLAN_COL0 - 1] == ""
     assert head[PLAN_COL0 + 4] == "План: что буду делать"
     assert head[PLAN_COL0 + 8:PLAN_COL0 + 13] == ["Привлечение — людей", "Прогрев — людей", "Закрытие — людей",
                                                   "Факт: что сделал(а)", "% плана"]
-    assert grid[4][PLAN_COL0 + 12] == '=IF(OR(SUM(AA5:AC5)=0;COUNT(AE5:AG5)=0);"";SUM(AE5:AG5)/SUM(AA5:AC5))'
+    assert grid[4][PLAN_COL0 + 12] == '=IF(OR(SUM(AB5:AD5)=0;COUNT(AF5:AH5)=0);"";SUM(AF5:AH5)/SUM(AB5:AD5))'
     # факт: минуты касаний этого дня с нужным этапом; диапазоны сдвинуты на колонку и заходят за разделитель
-    assert grid[4][PLAN_COL0 + 6] == ('=IFERROR(1/(1/ROUND(SUMIFS($L$5:$AA$104;$J$5:$Y$104;$Z5;'
-                                      '$K$5:$Z$104;"*прогрев*")/60;2));"")')
-    assert grid[5][PLAN_COL0 + 8] == '=IFERROR(1/(1/COUNTIFS($J$5:$Y$104;$Z6;$K$5:$Z$104;"*привлеч*"));"")'
+    assert grid[4][PLAN_COL0 + 6] == ('=IFERROR(1/(1/ROUND(SUMIFS($M$5:$AB$104;$K$5:$Z$104;$AA5;'
+                                      '$L$5:$AA$104;"*прогрев*")/60;2));"")')
+    assert grid[5][PLAN_COL0 + 8] == '=IFERROR(1/(1/COUNTIFS($K$5:$Z$104;$AA6;$L$5:$AA$104;"*привлеч*"));"")'
     assert grid[4][COL_NEXT_DATE] == "2026-11-06" and grid[4][COL_NEXT_WHAT] == "созвон с Антоном"
     from bot.workbook import partner_links
     links = json.dumps(partner_links(77, PLAN_COL0, 1, 2), ensure_ascii=False)
-    assert '"uri": "#gid=77&range=Z4"' in links and '"uri": "#gid=77&range=A4"' in links
+    assert '"uri": "#gid=77&range=AA4"' in links and '"uri": "#gid=77&range=A4"' in links
     assert '"stringValue": "← Оглавление   📖 Инструкция"' in links and '"uri": "#gid=2"' in links
     assert "HYPERLINK" not in json.dumps(grid, ensure_ascii=False)
     assert grid[4][PLAN_COL0] == "2026-11-03" and grid[62][PLAN_COL0] == "2026-12-31"
     reqs = json.dumps(partner_tab_format_requests(42, service_email="bot@x"), ensure_ascii=False)
-    assert 'OR($D5=\\"\\";$D5<TODAY();$D5>TODAY()+7)' in reqs and "LOWER($H5)" in reqs
-    assert "=$Z5=TODAY()+1" in reqs and "DATE_IS_VALID" in reqs and "=$Z5>TODAY()" in reqs
-    assert 'AND($F5<>\\"\\";$G5=\\"\\")' in reqs and '"Прогрев"' in reqs
+    assert 'OR($E5=\\"\\";$E5<TODAY();$E5>TODAY()+7)' in reqs and "LOWER($I5)" in reqs
+    assert "=$AA5=TODAY()+1" in reqs and "DATE_IS_VALID" in reqs and "=$AA5>TODAY()" in reqs
+    assert 'AND($G5<>\\"\\";$H5=\\"\\")' in reqs and '"Прогрев"' in reqs
+    assert '"note": "Не обязательно.' in reqs
     assert reqs.count("addProtectedRange") == 8   # шапка кусками вокруг целей + даты, №, %, факт-формулы
     assert "userEnteredFormat(" not in reqs.replace("userEnteredFormat(textFormat,", "")
 
@@ -300,11 +301,11 @@ def test_month_block_parsed():
     from openpyxl import load_workbook
     wb = load_workbook(io.BytesIO(network_xlsx()))
     ws = wb["Петрова Анна"]
-    assert ws.cell(row=1, column=8).value.startswith("Мой месяц")
+    assert ws.cell(row=1, column=9).value.startswith("Мой месяц")
     for k, v in enumerate([3, 5, 2, 4]):
-        ws.cell(row=2, column=9 + k, value=v)
+        ws.cell(row=2, column=10 + k, value=v)
     for k, v in enumerate([1, 2, 0, 1]):
-        ws.cell(row=3, column=9 + k, value=v)
+        ws.cell(row=3, column=10 + k, value=v)
     buf = io.BytesIO()
     wb.save(buf)
     tab = next(t for t in parse_partner_tabs(buf.getvalue()) if t.name == "Петрова Анна")
@@ -332,69 +333,43 @@ def test_backfill_counts_payment_with_touch_this_month(tmp_path):
     assert track(st, "B", [tab], date(2026, 11, 3)) == []        # второй раз не дублирует
 
 
-OLD_HEAD = ["№", "Имя клиента", "Откуда пришёл", "Следующий шаг: дата", "Следующий шаг: что", "Текущий статус",
-            "Что происходит"] + [h for n in range(1, 6) for h in (f"Дата {n}-го касания", "Формат")] + [
-            "", "Дата", "Привлечение — план, ч", "Прогрев — план, ч", "Закрытие — план, ч", "План: что буду делать",
-            "Привлечение — факт, ч", "Прогрев — факт, ч", "Закрытие — факт, ч", "Привлечение — людей",
-            "Прогрев — людей", "Закрытие — людей", "Факт: что сделал(а)", "% плана"]
+PRE_CONTACT_HEAD = ["№", "Имя клиента", "Откуда пришёл", "Следующий шаг: дата", "Следующий шаг: что",
+                    "Время, мин", "Этап", "Текущий статус", "Что происходит"] + [
+    h for n in range(1, 6) for h in (f"Дата {n}-го касания", "Формат (этап)", "Мин")] + ["", "Дата"]
 
 
-def old_layout_tab():
+def test_contact_column_added_to_existing_tab():
+    from bot.setup_sheet import contact_upgrade_requests, needs_contact
     wb = Workbook()
     ws = wb.active
-    ws.title = "Старая Вкладка"
-    ws.cell(1, 6, "Мой месяц: ноябрь")
-    for i, h in enumerate(OLD_HEAD):
+    ws.title = "Юля"
+    ws.cell(1, 8, "Мой месяц: ноябрь")
+    for i, h in enumerate(PRE_CONTACT_HEAD):
         ws.cell(4, i + 1, h)
-    ws.cell(5, 2, "Котова Вера")
-    ws.cell(5, 8, date(2026, 10, 29))
-    ws.cell(5, 9, "встреча")
-    for k in range(10):
-        ws.cell(5 + k, 19, date(2026, 11, 3) + timedelta(days=k))
-    ws.cell(6, 24, 1.5)        # 04.11 — факт, внесённый руками
-    ws.cell(11, 24, 2)         # 09.11 — тоже руками, но «сегодня»
+    ws.cell(5, 2, "Коваленко Олеся")
+    ws.cell(5, 10, date(2026, 11, 12))
+    ws.cell(5, 11, "общение прогрев")
+    ws.cell(5, 12, 60)
     buf = io.BytesIO()
     wb.save(buf)
-    return parse_partner_tabs(buf.getvalue())[0]
-
-
-def test_upgrade_old_tab_to_time_and_stage():
-    from bot.setup_sheet import needs_time_stage, time_stage_upgrade_requests
-    tab = old_layout_tab()
-    assert needs_time_stage(tab) and tab.plan_col == 18
-    assert tab.clients[0].touches[0].fmt == "встреча" and tab.clients[0].touches[0].minutes is None
-    reqs = time_stage_upgrade_requests(tab, 9, date(2026, 11, 9), "bot@x", 1, 2)
-    ins = [r["insertDimension"]["range"] for r in reqs if "insertDimension" in r]
-    assert [(r["startIndex"], r["endIndex"]) for r in ins] == [(5, 7), (19, 20), (17, 18), (15, 16), (13, 14), (11, 12)]
-    cells = {(r["updateCells"]["start"]["rowIndex"], r["updateCells"]["start"]["columnIndex"]):
-             [v.get("userEnteredValue", {}) for v in r["updateCells"]["rows"][0]["values"]]
-             for r in reqs if "updateCells" in r}
-    assert [v["stringValue"] for v in cells[(3, 5)]] == ["Время, мин", "Этап"]
-    assert [v["stringValue"] for v in cells[(3, 10)]] == ["Формат (этап)", "Мин"]   # после 1-го касания
-    assert [v["stringValue"] for v in cells[(3, 22)]] == ["Формат (этап)", "Мин"]   # после 5-го
-    # блок часов переехал с S на Z; 04.11 с ручным фактом не трогаем, 09.11 (сегодня) — формулы
-    assert (5, 30) not in cells and (10, 30) in cells and (4, 30) in cells
-    assert cells[(10, 30)][1]["formulaValue"].startswith("=IFERROR(1/(1/ROUND(SUMIFS($L$5:$AA$104;$J$5:$Y$104;$Z11;")
+    tab = parse_partner_tabs(buf.getvalue())[0]
+    assert needs_contact(tab) and tab.plan_col == 25 and tab.month_ok
+    assert tab.clients[0].touches[0].minutes == 60
+    reqs = contact_upgrade_requests(tab, 9, 1, 2)
+    ins = reqs[0]["insertDimension"]["range"]
+    assert (ins["startIndex"], ins["endIndex"]) == (2, 3)      # сразу после имени: «Мой месяц» уезжает целиком
+    assert reqs[1]["updateCells"]["rows"][0]["values"][0]["userEnteredValue"]["stringValue"] == "Контакт (по желанию)"
     text = json.dumps(reqs, ensure_ascii=False)
-    assert '"uri": "#gid=9&range=Z4"' in text and "bot:факт-формулы" in text
-    # после перестройки та же вкладка читается как новая и второй раз не перестраивается
-    from bot.workbook import CRM_HEADERS
-    wb = Workbook()
-    ws = wb.active
-    ws.title = "Новая"
-    for i, h in enumerate(CRM_HEADERS + ["", "Дата"]):
-        ws.cell(4, i + 1, h)
-    ws.cell(5, 2, "Котова Вера")
-    ws.cell(5, 10, date(2026, 11, 9))
-    ws.cell(5, 11, "созвон (прогрев)")
-    ws.cell(5, 12, 30)
+    assert '"uri": "#gid=9&range=AA4"' in text and '"note": "Не обязательно.' in text
+    assert '"columnIndex": 4' in text                          # «→ к моим часам» теперь в E1
+    # после вставки вкладка читается как новая и второй раз не трогается
+    ws.insert_cols(3)
+    ws.cell(4, 3, "Контакт (по желанию)")
     buf = io.BytesIO()
     wb.save(buf)
     new = parse_partner_tabs(buf.getvalue())[0]
-    assert not needs_time_stage(new) and new.time_col == 5
-    assert new.touch_cols[0] == (1, 9, 10, 11)
-    t = new.clients[0].touches[0]
-    assert (t.when, t.fmt, t.minutes) == (date(2026, 11, 9), "созвон (прогрев)", 30)
+    assert not needs_contact(new) and new.contact_col == 2 and new.plan_col == 26
+    assert new.touch_cols[0] == (1, 10, 11, 12) and new.clients[0].touches[0].minutes == 60
 
 
 def test_expand_history_triples():
@@ -407,14 +382,14 @@ def test_expand_history_triples():
         def batch(self, reqs):
             self.reqs += reqs
     from bot.workbook import PartnerTab, TOUCH_COLS
-    tab = PartnerTab(name="X", touch_cols=list(TOUCH_COLS), plan_col=25)
+    tab = PartnerTab(name="X", touch_cols=list(TOUCH_COLS), plan_col=26)
     sh = FakeSheet()
     expand_history(sh, tab, 5, add=2)
     ins = sh.reqs[0]["insertDimension"]["range"]
-    assert (ins["startIndex"], ins["endIndex"]) == (24, 30)       # перед разделителем — формулы расширятся
+    assert (ins["startIndex"], ins["endIndex"]) == (25, 31)       # перед разделителем — формулы расширятся
     heads = [v["userEnteredValue"]["stringValue"] for v in sh.reqs[1]["updateCells"]["rows"][0]["values"]]
     assert heads == ["Дата 6-го касания", "Формат (этап)", "Мин", "Дата 7-го касания", "Формат (этап)", "Мин"]
-    assert "range=AF4" in json.dumps(sh.reqs, ensure_ascii=False)
+    assert "range=AG4" in json.dumps(sh.reqs, ensure_ascii=False)
 
 
 def test_month_block_repaired_after_column_insert():
@@ -426,9 +401,9 @@ def test_month_block_repaired_after_column_insert():
     ws.title = "Сдвинутый"
     for i, v in enumerate(["Мой месяц: ноябрь", "Новые контакты", "Партнёры 95", "Партнёры 240", "",
                            "Маленький продукт", "Выполнено"]):
-        ws.cell(1, 8 + i, v)
+        ws.cell(1, 9 + i, v)
     for i, v in enumerate([3, 5, 2, None, 4]):
-        ws.cell(2, 9 + i, v)
+        ws.cell(2, 10 + i, v)
     for i, h in enumerate(CRM_HEADERS + ["", "Дата"]):
         ws.cell(4, i + 1, h)
     buf = io.BytesIO()
@@ -439,22 +414,22 @@ def test_month_block_repaired_after_column_insert():
              "range": {"startRowIndex": 1, "endRowIndex": 2, "startColumnIndex": 0, "endColumnIndex": 8}},
             {"protectedRangeId": 2, "description": "bot:факт-формулы",
              "range": {"startRowIndex": 4, "endRowIndex": 104}}]
-    reqs = month_repair_requests(tab, 9, TODAY, ";", prot, 38)
+    reqs = month_repair_requests(tab, 9, TODAY, ";", prot, 39)
     rows = {r["updateCells"]["start"]["rowIndex"]: [v.get("userEnteredValue", {}) for v in r["updateCells"]["rows"][0]["values"]]
             for r in reqs if "updateCells" in r and "start" in r["updateCells"]}
     assert [v.get("stringValue") for v in rows[0]] == ["Мой месяц: ноябрь", "Новые контакты", "Партнёры 95",
                                                        "Партнёры 240", "Маленький продукт", "Выполнено"]
     assert [v.get("numberValue") for v in rows[1][1:5]] == [3, 5, 2, 4]
-    assert rows[2][5]["formulaValue"] == '=IF(SUM(I2:L2)=0;"";SUM(I3:L3)/SUM(I2:L2))'
+    assert rows[2][5]["formulaValue"] == '=IF(SUM(J2:M2)=0;"";SUM(J3:M3)/SUM(J2:M2))'
     clear = next(r["updateCells"]["range"] for r in reqs if "updateCells" in r and "range" in r["updateCells"])
-    assert (clear["startColumnIndex"], clear["endColumnIndex"]) == (13, 14)        # старый «Выполнено» в N
+    assert (clear["startColumnIndex"], clear["endColumnIndex"]) == (14, 15)        # старый «Выполнено» в O
     text = json.dumps(reqs)
     assert '"protectedRangeId": 1' in text and '"protectedRangeId": 2' not in text
     assert text.count("addProtectedRange") == 4
     # собранный блок читается как правильный
     for i, v in enumerate(["Мой месяц: ноябрь", "Новые контакты", "Партнёры 95", "Партнёры 240",
                            "Маленький продукт", "Выполнено", None]):
-        ws.cell(1, 8 + i).value = v
+        ws.cell(1, 9 + i).value = v
     buf = io.BytesIO()
     wb.save(buf)
     assert parse_partner_tabs(buf.getvalue())[0].month_ok

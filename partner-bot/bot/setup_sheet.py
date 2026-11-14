@@ -361,46 +361,6 @@ def _text_row(gid: int, row: int, col: int, texts: list) -> dict:
                             "start": {"sheetId": gid, "rowIndex": row, "columnIndex": col}}}
 
 
-def needs_time_stage(tab) -> bool:
-    """Вкладка старого макета: пары «дата / формат», нет «Время, мин», «что» в колонке E."""
-    from .workbook import COL_NEXT_WHAT
-    return (tab.time_col is None and tab.next_what_col == COL_NEXT_WHAT and tab.plan_col is not None
-            and bool(tab.touch_cols) and all(len(t) < 4 or t[3] is None for t in tab.touch_cols))
-
-
-def time_stage_upgrade_requests(tab, gid: int, today: date, service_email: str = "",
-                                toc_gid: int | None = None, guide_gid: int | None = None,
-                                sep: str = ";") -> list[dict]:
-    """Одним атомарным batchUpdate: «Время, мин» и «Этап» после «Следующий шаг: что», колонка «Мин»
-    после каждого «Формата», формулы факта в блоке часов. Факт, внесённый руками в прошлые дни,
-    остаётся как есть; сегодня и дальше — формулы."""
-    from .workbook import (COL_TIME, FMT_HEADER, HEADER_ROW, HINT_CLIENTS, HINT_HOURS, MIN_HEADER,
-                           P_FACT, STAGE_HEADER, TIME_HEADER, fact_formulas, time_stage_requests)
-    pairs = sorted(tab.touch_cols, key=lambda t: t[1])
-    reqs = [{"insertDimension": {"range": {"sheetId": gid, "dimension": "COLUMNS",
-                                           "startIndex": COL_TIME, "endIndex": COL_TIME + 2},
-                                 "inheritFromBefore": True}}]
-    for _, d, f, *_ in reversed(pairs):          # справа налево — левые индексы не сдвигаются
-        reqs.append({"insertDimension": {"range": {"sheetId": gid, "dimension": "COLUMNS",
-                                                   "startIndex": f + 3, "endIndex": f + 4},
-                                         "inheritFromBefore": True}})
-    new_touch = [(n, d + 2 + k, f + 2 + k, f + 3 + k) for k, (n, d, f, *_) in enumerate(pairs)]
-    plan = tab.plan_col + 2 + len(pairs)
-    reqs.append(_text_row(gid, HEADER_ROW - 1, COL_TIME, [TIME_HEADER, STAGE_HEADER]))
-    for _, _, f, m in new_touch:
-        reqs.append(_text_row(gid, HEADER_ROW - 1, f, [FMT_HEADER, MIN_HEADER]))
-    reqs.append(_text_row(gid, 1, 0, [HINT_CLIENTS]))
-    reqs.append(_text_row(gid, 1, plan, [HINT_HOURS]))
-    hist0 = new_touch[0][1]
-    for dp in sorted(tab.days.values(), key=lambda x: x.day):
-        if not dp.row or (dp.day < today and (dp.fact or dp.people)):
-            continue
-        reqs.append(_text_row(gid, dp.row - 1, plan + P_FACT, fact_formulas(dp.row, plan, hist0, sep)))
-    reqs += time_stage_requests(gid, plan, new_touch, service_email, sep)
-    reqs += partner_links(gid, plan, toc_gid, guide_gid)
-    return reqs
-
-
 def month_repair_requests(tab, gid: int, today: date, sep: str, protected: list[dict],
                           width: int) -> list[dict]:
     """Собирает «Мой месяц» обратно, если в блок попала чужая колонка: подписи, цели и результаты
@@ -486,13 +446,32 @@ def refresh_stage_criteria(sh: Sheet, tab) -> int:
     return len(data)
 
 
-def upgrade_time_stage(sh: Sheet, tab, gid: int, today: date) -> bool:
-    if not needs_time_stage(tab):
+def needs_contact(tab) -> bool:
+    """Вкладка с временем и этапом, но ещё без «Контакт (по желанию)» после имени."""
+    return tab.time_col is not None and tab.contact_col is None and tab.next_what_col == 4 \
+        and tab.plan_col is not None
+
+
+def contact_upgrade_requests(tab, gid: int, toc_gid: int | None = None,
+                             guide_gid: int | None = None) -> list[dict]:
+    """Одним batchUpdate: колонка «Контакт (по желанию)» сразу после имени клиента.
+    Всё правее (шаг, история, «Мой месяц», часы, формулы, защита, подсветка) сдвигается целиком."""
+    from .workbook import COL_CONTACT, CONTACT_HEADER, HEADER_ROW, contact_requests
+    reqs = [{"insertDimension": {"range": {"sheetId": gid, "dimension": "COLUMNS",
+                                           "startIndex": COL_CONTACT, "endIndex": COL_CONTACT + 1},
+                                 "inheritFromBefore": False}},
+            _text_row(gid, HEADER_ROW - 1, COL_CONTACT, [CONTACT_HEADER])]
+    reqs += contact_requests(gid)
+    reqs += partner_links(gid, tab.plan_col + 1, toc_gid, guide_gid)
+    return reqs
+
+
+def upgrade_contact(sh: Sheet, tab, gid: int) -> bool:
+    if not needs_contact(tab):
         return False
     tabs = sh.tabs()
-    sh.batch(time_stage_upgrade_requests(tab, gid, today, service_email(), tabs.get(TOC), tabs.get(GUIDE_TAB),
-                                         sh.sep()))
-    log.info("Вкладка «%s»: добавлены время и этап, факт считается формулами", tab.name)
+    sh.batch(contact_upgrade_requests(tab, gid, tabs.get(TOC), tabs.get(GUIDE_TAB)))
+    log.info("Вкладка «%s»: добавлена колонка «Контакт (по желанию)»", tab.name)
     return True
 
 

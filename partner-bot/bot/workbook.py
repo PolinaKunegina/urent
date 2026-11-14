@@ -27,6 +27,9 @@ HEADER_ROW = 4                 # строка заголовков (1-based)
 FIRST_ROW = HEADER_ROW + 1
 CLIENT_ROWS = 100              # сколько строк под клиентов
 TIME_HEADER, STAGE_HEADER = "Время, мин", "Этап"
+CONTACT_HEADER = "Контакт (по желанию)"
+CONTACT_NOTE = ("Не обязательно. @ник в Telegram, телефон или почта — пригодится, "
+                "когда будем переносить клиентов в Советник.")
 FMT_HEADER, MIN_HEADER = "Формат (этап)", "Мин"
 
 
@@ -35,14 +38,16 @@ def touch_headers(n: int) -> list[str]:
 
 
 CRM_HEADERS = [
-    "№", "Имя клиента", "Откуда пришёл",
+    "№", "Имя клиента", CONTACT_HEADER, "Откуда пришёл",
     "Следующий шаг: дата", "Следующий шаг: что", TIME_HEADER, STAGE_HEADER,
     "Текущий статус", "Что происходит",
     *[h for n in range(1, 6) for h in touch_headers(n)],
 ]
-COL_NAME, COL_SOURCE, COL_NEXT_DATE, COL_NEXT_WHAT = 1, 2, 3, 4
-COL_TIME, COL_STAGE, COL_STATUS, COL_DESC = 5, 6, 7, 8
-HIST_COL0 = 9                  # J — первая «Дата касания»
+COL_NAME, COL_CONTACT, COL_SOURCE, COL_NEXT_DATE, COL_NEXT_WHAT = 1, 2, 3, 4, 5
+COL_TIME, COL_STAGE, COL_STATUS, COL_DESC = 6, 7, 8, 9
+HIST_COL0 = 10                 # K — первая «Дата касания»
+CONTACT_BG = {"red": 1.0, "green": 1.0, "blue": 1.0}   # белая, а не жёлтая: заполнять не обязательно
+OPTIONAL_HEAD = {"red": 0.96, "green": 0.96, "blue": 0.96}
 # история: (n, дата, «формат (этап)», минуты)
 TOUCH_COLS = [(n, HIST_COL0 + 3 * (n - 1), HIST_COL0 + 3 * (n - 1) + 1, HIST_COL0 + 3 * (n - 1) + 2)
               for n in range(1, 6)]
@@ -54,7 +59,7 @@ STAGE_OF = {"attract": "привлечение", "warmup": "прогрев", "cl
 STAGE_MATCH = {"attract": "привлеч", "warmup": "прогрев", "close": "закрыт"}
 OLD_STAGE_CRITERIA = {f'"*({STAGE_OF[p]})*"': f'"*{STAGE_MATCH[p]}*"' for p in STAGE_OF}
 
-PLAN_COL0 = len(CRM_HEADERS) + 1   # колонка Z — начало блока часов (Y — узкий разделитель)
+PLAN_COL0 = len(CRM_HEADERS) + 1   # колонка AA — начало блока часов (Z — узкий разделитель)
 PLAN_HEADERS = [
     "Дата",
     "Привлечение — план, ч", "Прогрев — план, ч", "Закрытие — план, ч", "План: что буду делать",
@@ -90,7 +95,7 @@ RESULT_CATS = [   # (ключ, подпись, по какому статусу 
     ("c240", "Партнёры 240", r"(?<!\d)240(?!\d)"),
     ("c5000", "Маленький продукт", r"маленький продукт|купил продукт|интенсив|5000"),   # любая покупка, кроме оргвзноса
 ]
-MONTH_COL = 7                  # H: подписи блока; I..L — категории; M — % выполнения
+MONTH_COL = 8                  # I: подписи блока; J..M — категории; N — % выполнения
 MONTHS_NOM = ["январь", "февраль", "март", "апрель", "май", "июнь", "июль", "август", "сентябрь",
               "октябрь", "ноябрь", "декабрь"]
 
@@ -149,6 +154,7 @@ class PartnerTab:
     month_col: int | None = None                     # колонка подписи «Мой месяц»
     plan_col: int | None = None                      # колонка «Дата» блока часов
     time_col: int | None = None                      # «Время, мин» (нет — вкладка старого макета)
+    contact_col: int | None = None                   # «Контакт (по желанию)»
     month_cols: dict = field(default_factory=dict)   # категория -> колонка её подписи в «Мой месяц»
     month_ok: bool = True                            # подписи стоят подряд, как задумано
     month_end: int = 0                               # колонка за последней ячейкой блока
@@ -257,7 +263,7 @@ def _parse_rows(title: str, rows: list[tuple], sandbox: bool) -> PartnerTab:
         return row[i] if i is not None and i < len(row) else None
 
     tab = PartnerTab(name=title, sandbox=sandbox, touch_cols=touch_cols, plan_col=c_date,
-                     time_col=find("время"), next_what_col=c_next_what)
+                     time_col=find("время"), next_what_col=c_next_what, contact_col=find("контакт"))
     for offset, row in enumerate(rows[1:], 1):
         r_num = HEADER_ROW + offset
         name = _clean(cell(row, c_name))
@@ -486,6 +492,7 @@ def partner_tab_values(name: str, start: date, end: date, clients: list[dict] | 
     for k, c in enumerate(clients or []):
         row = grid[FIRST_ROW - 1 + k]
         row[COL_NAME] = c.get("name", "")
+        row[COL_CONTACT] = c.get("contact", "")
         row[COL_SOURCE] = c.get("source", "")
         row[COL_NEXT_DATE] = c.get("next_date", "")
         row[COL_NEXT_WHAT] = c.get("next_what", "")
@@ -553,7 +560,8 @@ def partner_tab_format_requests(sheet_id: int, sep: str = ";", service_email: st
         fill(rng(f0, last, PLAN_COL0 + 1, PLAN_COL0 + plan_w), YELLOW),
         date_fmt(rng(f0, last, COL_NEXT_DATE, COL_NEXT_DATE + 1)),
         date_fmt(rng(f0, last, PLAN_COL0, PLAN_COL0 + 1)),
-        width(0, 1, 40), width(1, 2, 190), width(2, 3, 140), width(3, 4, 110), width(4, 5, 190),
+        width(0, 1, 40), width(COL_NAME, COL_NAME + 1, 190), width(COL_SOURCE, COL_SOURCE + 1, 140),
+        width(COL_NEXT_DATE, COL_NEXT_DATE + 1, 110), width(COL_NEXT_WHAT, COL_NEXT_WHAT + 1, 190),
         width(COL_STATUS, COL_STATUS + 1, 170), width(COL_DESC, COL_DESC + 1, 260),
         width(crm_w, crm_w + 1, 24),
         width(PLAN_COL0, PLAN_COL0 + 1, 95), width(PLAN_COL0 + P_PLAN, PLAN_COL0 + P_PLAN_NOTE, 95),
@@ -606,7 +614,32 @@ def partner_tab_format_requests(sheet_id: int, sep: str = ";", service_email: st
                 "range": r, "description": "bot:заголовки", "warningOnly": False,
                 "editors": {"users": [service_email]}}}})
     reqs += time_stage_requests(sheet_id, PLAN_COL0, TOUCH_COLS, service_email, sep)
+    reqs += contact_requests(sheet_id)
     return reqs
+
+
+def contact_requests(sheet_id: int) -> list[dict]:
+    """Колонка «Контакт (по желанию)»: белая, заголовок серым курсивом, подсказка в заметке."""
+    f0, last = FIRST_ROW - 1, HEADER_ROW + CLIENT_ROWS
+
+    def rng(r0, r1):
+        return {"sheetId": sheet_id, "startRowIndex": r0, "endRowIndex": r1,
+                "startColumnIndex": COL_CONTACT, "endColumnIndex": COL_CONTACT + 1}
+    return [
+        {"updateDimensionProperties": {"range": {"sheetId": sheet_id, "dimension": "COLUMNS",
+                                                 "startIndex": COL_CONTACT, "endIndex": COL_CONTACT + 1},
+                                       "properties": {"pixelSize": 150}, "fields": "pixelSize"}},
+        {"repeatCell": {"range": rng(f0, last), "cell": {"userEnteredFormat": {"backgroundColor": CONTACT_BG}},
+                        "fields": "userEnteredFormat.backgroundColor"}},
+        {"repeatCell": {"range": rng(HEADER_ROW - 1, HEADER_ROW), "cell": {"userEnteredFormat": {
+            "backgroundColor": OPTIONAL_HEAD, "wrapStrategy": "WRAP", "verticalAlignment": "MIDDLE",
+            "textFormat": {"bold": False, "italic": True,
+                           "foregroundColor": {"red": 0.4, "green": 0.4, "blue": 0.4}}}},
+            "fields": "userEnteredFormat.backgroundColor,userEnteredFormat.wrapStrategy,"
+                      "userEnteredFormat.verticalAlignment,userEnteredFormat.textFormat"}},
+        {"updateCells": {"rows": [{"values": [{"note": CONTACT_NOTE}]}], "fields": "note",
+                         "start": {"sheetId": sheet_id, "rowIndex": HEADER_ROW - 1, "columnIndex": COL_CONTACT}}},
+    ]
 
 
 def time_stage_requests(sheet_id: int, plan_col: int, touch_cols: list, service_email: str = "",
