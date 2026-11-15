@@ -22,7 +22,7 @@ from telegram.ext import (Application, CallbackQueryHandler, CommandHandler, Con
 from .config import Config, load_config
 from .network import (e, needs_evening_ping, render_evening_chat, render_partner_status,
                       split_message)
-from .onboarding import OnboardingError, add_partner, clean_name, promote
+from .onboarding import OnboardingError, add_partner, clean_name, give_access, parse_email, promote
 from .report import load_network, morning_text, sync, weekly_text
 from .store import Store
 
@@ -58,8 +58,9 @@ HELP = (
     "/pause — пауза рассылок: до завтра 12:00, /pause 10.11.2027 — до даты, /pause стоп — без срока; /resume — включить\n"
     "/setsheet ссылка — основная таблица\n"
     "/setsandbox ссылка — таблица-песочница новых партнёров\n"
-    "/addpartner Фамилия Имя @ник — добавить новичка в песочницу\n"
-    "/promote Фамилия Имя — перевести из песочницы в основную таблицу\n"
+    "/addpartner Фамилия Имя @ник почта — добавить новичка в песочницу и выдать доступ\n"
+    "/promote Фамилия Имя — перевести из песочницы в основную таблицу (доступ — по той же почте)\n"
+    "/access Фамилия Имя почта — выдать доступ уже добавленному партнёру\n"
     "/myid — id чата и пользователя"
 )
 
@@ -245,21 +246,44 @@ async def cmd_addpartner(update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> None
     if not _is_manager(ctx, update):
         return await _deny(update)
     args = ctx.args or []
+    email = parse_email(" ".join(args))
     nick = next((a for a in args if a.startswith("@")), "")
     try:
-        name = clean_name(" ".join(a for a in args if a != nick))
+        name = clean_name(" ".join(a for a in args if a != nick and a.lower() != email))
     except OnboardingError:
-        await update.effective_message.reply_text("Так: /addpartner Иванова Мария @ivanova_m")
+        await update.effective_message.reply_text("Так: /addpartner Иванова Мария @ivanova_m ivanova@gmail.com\n"
+                                                  "(ник и почта — по желанию)")
         return
     _apply_overrides(ctx)
     try:
-        added = await asyncio.to_thread(add_partner, _cfg(ctx), name, nick, _today(_cfg(ctx)))
+        added = await asyncio.to_thread(add_partner, _cfg(ctx), name, nick, _today(_cfg(ctx)), None, email)
     except OnboardingError as err:
         await update.effective_message.reply_text(str(err))
         return
     await update.effective_message.reply_text(
         f"✅ {added.name} — в песочнице, вкладка: {added.tab_url}\n"
-        "Попроси партнёра нажать Start у бота, чтобы он получал напоминания.")
+        + (added.access + "\n" if added.access else
+           "Доступа к таблице пока нет: /access " + added.name + " почта@gmail.com\n")
+        + "Попроси партнёра нажать Start у бота, чтобы он получал напоминания.")
+
+
+async def cmd_access(update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> None:
+    """/access Фамилия Имя почта — записать почту партнёру и выдать доступ «Редактор» к его таблице."""
+    if not _is_manager(ctx, update):
+        return await _deny(update)
+    args = ctx.args or []
+    email = parse_email(" ".join(args))
+    name = " ".join(a for a in args if a.lower() != email).strip()
+    if not (email and name):
+        await update.effective_message.reply_text("Так: /access Иванова Мария ivanova@gmail.com")
+        return
+    _apply_overrides(ctx)
+    try:
+        res = await asyncio.to_thread(give_access, _cfg(ctx), name, email)
+    except OnboardingError as err:
+        await update.effective_message.reply_text(str(err))
+        return
+    await update.effective_message.reply_text(f"{res.name}: {res.access or 'почта записана'}\nВкладка: {res.tab_url}")
 
 
 async def cmd_promote(update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> None:
@@ -277,7 +301,9 @@ async def cmd_promote(update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> None:
         await update.effective_message.reply_text(str(err))
         return
     await update.effective_message.reply_text(
-        f"✅ {moved.name} теперь в основной таблице со всеми клиентами и часами: {moved.tab_url}")
+        f"✅ {moved.name} теперь в основной таблице со всеми клиентами и часами: {moved.tab_url}"
+        + (f"\n{moved.access}" if moved.access else
+           f"\nДоступа к основной таблице пока нет: /access {moved.name} почта@gmail.com"))
 
 
 async def cmd_guide(update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> None:
@@ -607,6 +633,7 @@ def main() -> None:
     app.add_handler(CommandHandler("resume", cmd_resume))
     app.add_handler(CommandHandler("join", cmd_join))
     app.add_handler(CommandHandler("addpartner", cmd_addpartner))
+    app.add_handler(CommandHandler("access", cmd_access))
     app.add_handler(CommandHandler("promote", cmd_promote))
     app.add_handler(CallbackQueryHandler(on_join_button, pattern=r"^join$"))
     app.add_handler(MessageHandler(filters.ChatType.PRIVATE & filters.TEXT & ~filters.COMMAND,

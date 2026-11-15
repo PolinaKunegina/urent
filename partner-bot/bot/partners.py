@@ -37,6 +37,7 @@ class Partner:
     aliases: list[str] = field(default_factory=list)
     telegram: str = ""        # @username без @, в нижнем регистре
     added: "date | None" = None   # когда добавлен (для песочницы: перевод через 2 недели)
+    emails: list[str] = field(default_factory=list)   # Google-почта для доступа к таблице
 
     @property
     def username(self) -> str:
@@ -56,7 +57,8 @@ class Directory:
     @classmethod
     def from_records(cls, raw: list[dict]) -> "Directory":
         return cls([Partner(name=x["name"], aliases=x.get("aliases", []),
-                            telegram=x.get("telegram", ""), added=x.get("added")) for x in raw])
+                            telegram=x.get("telegram", ""), added=x.get("added"),
+                            emails=x.get("emails", [])) for x in raw])
 
     @classmethod
     def load(cls, path: str) -> "Directory":

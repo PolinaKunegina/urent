@@ -468,3 +468,48 @@ def test_history_format_column_takes_text():
     assert dv[27]["condition"]["type"] == "NUMBER_GREATER_THAN_EQ"  # минуты
     reqs = touch_column_requests(5, [(6, 25, 26, 27)])
     assert sum(1 for r in reqs if "setDataValidation" in r and "rule" not in r["setDataValidation"]) == 1
+
+
+def test_partner_email_and_access():
+    from bot.onboarding import _grant, parse_email
+    assert parse_email("Крюкова Елена @elena_k Elena.K@gmail.com") == "elena.k@gmail.com"
+    assert parse_email("Крюкова Елена @elena_k") == ""
+
+    class Resp:
+        def __init__(self, code, body=None):
+            self.status_code, self._b = code, body or {}
+
+        def json(self):
+            return self._b
+
+    class Session:
+        def __init__(self):
+            self.shared = []
+
+        def post(self, url, params=None, json=None, timeout=None):
+            self.shared.append((json["emailAddress"], params["sendNotificationEmail"]))
+            if json["emailAddress"].startswith("nogoogle"):
+                return Resp(400, {"error": {"message": "Invalid sharing request"}})
+            return Resp(200)
+
+    class FakeSheet:
+        id = "SID"
+
+        def __init__(self, head):
+            self.head, self.puts = head, []
+
+        def get_values(self, rng):
+            return [self.head] if rng.endswith("1:Z1") else [["Партнёр"], ["Иванова Мария"], ["Крюкова Елена"]]
+
+        def put(self, rng, values, raw=False):
+            self.puts.append((rng, values))
+
+    s, sh = Session(), FakeSheet(["Партнёр", "Telegram", "Как ещё", "Добавлен", "Почта (Google)"])
+    msg = _grant(s, sh, "Крюкова Елена", ["elena@gmail.com", "nogoogle@mail.ru"])
+    assert sh.puts == [("'Партнёры'!E3", [["elena@gmail.com, nogoogle@mail.ru"]])]
+    assert s.shared == [("elena@gmail.com", "true"), ("nogoogle@mail.ru", "true")]
+    assert "выдан: elena@gmail.com" in msg and "nogoogle@mail.ru — к этой почте не привязан Google-аккаунт" in msg
+    sh = FakeSheet(["Партнёр", "Telegram", "Как ещё", "Добавлен"])      # колонки «Почта» ещё нет
+    _grant(Session(), sh, "Крюкова Елена", ["elena@gmail.com"])
+    assert sh.puts[0][0] == "'Партнёры'!E1" and sh.puts[1][0] == "'Партнёры'!E3"
+    assert _grant(Session(), sh, "Крюкова Елена", []) == ""
