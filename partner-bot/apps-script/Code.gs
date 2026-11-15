@@ -1,9 +1,17 @@
 /**
  * Партнёрская сеть: «Следующий шаг» сразу попадает в историю касаний — с минутами и этапом.
+ * © Полина Кунегина. Все права защищены.
  *
- * Как поставить (один раз, на всю таблицу):
- *   Расширения → Apps Script → стереть всё в окне → вставить этот код → 💾 Сохранить.
- * Больше ничего не нужно: скрипт срабатывает сам при каждой правке, у всех, кто редактирует.
+ * Скрипт живёт в ОТДЕЛЬНОМ проекте Apps Script на Диске владельца, а не внутри таблицы:
+ * редакторы таблицы его не видят, и при «Файл → Создать копию» он не копируется.
+ *
+ * Как поставить (один раз):
+ *   1. script.google.com → «Новый проект» → стереть всё → вставить этот код → 💾 Сохранить.
+ *      Аккаунт должен быть редактором таблиц из SHEETS.
+ *   2. Сверху в списке функций выбрать install → «Выполнить» → разрешить доступ
+ *      («Дополнительные настройки» → «Перейти на страницу…» → «Разрешить»).
+ *   3. В самой таблице: Расширения → Apps Script → стереть весь старый код → 💾 Сохранить.
+ * Проверить, что подключено: выполнить status. Отключить: выполнить uninstall.
  *
  * Правила:
  *  • вписали дату следующего шага → в первую свободную тройку «Дата N-го касания /
@@ -12,13 +20,50 @@
  *  • поменяли дату, а прошлый шаг ещё не наступил (перенос встречи) → правится последняя тройка;
  *  • поменяли дату, а прошлый шаг уже прошёл (касание состоялось) → добавляется новая тройка;
  *  • тройки закончились → бот добавит новые колонки в течение часа.
- * По «(этапу)» в истории таблица считает факт часов и людей в блоке «Мои часы по дням».
  */
+var SHEETS = [
+  '1Qmor5QB9QTwQMBAfGUMexlTpHysdOzwReeOlYN5-uSA',   // основная таблица сети
+  '1KqLHQEmYgDGKwRFwDVSgVaoKNQc_0aau3GaqdmL2PDQ'    // песочница новых партнёров
+];
+var HANDLER = 'onStepEdit';
 var HEADER_ROW = 4;
 var SERVICE = ['Оглавление', 'Инструкция', 'Сводка', 'Партнёры', 'Итоги недели'];
 
-function onEdit(e) {
+/** Подключает скрипт к таблицам. Запустить один раз вручную. */
+function install() {
+  uninstall();
+  var done = [];
+  SHEETS.forEach(function (id) {
+    try {
+      ScriptApp.newTrigger(HANDLER).forSpreadsheet(id).onEdit().create();
+      done.push(SpreadsheetApp.openById(id).getName());
+    } catch (err) {
+      Logger.log('Не удалось подключить ' + id + ': ' + err);
+    }
+  });
+  Logger.log('Подключено: ' + (done.join(', ') || 'ничего — проверьте права редактора'));
+}
+
+/** Отключает скрипт от всех таблиц. */
+function uninstall() {
+  ScriptApp.getProjectTriggers().forEach(function (t) {
+    if (t.getHandlerFunction() === HANDLER) ScriptApp.deleteTrigger(t);
+  });
+}
+
+/** Показывает, к каким таблицам скрипт подключён. */
+function status() {
+  var ids = ScriptApp.getProjectTriggers()
+    .filter(function (t) { return t.getHandlerFunction() === HANDLER; })
+    .map(function (t) { return t.getTriggerSourceId(); });
+  Logger.log(ids.length ? 'Подключено к: ' + ids.join(', ') : 'Не подключено: выполните install');
+}
+
+/** Срабатывает на каждую правку в подключённых таблицах. */
+function onStepEdit(e) {
   if (!e || !e.range) return;
+  var c0 = e.range.getColumn(), c1 = e.range.getLastColumn();
+  if (c1 < 3 || c0 > 12 || e.range.getLastRow() <= HEADER_ROW) return;   // быстрый выход: не колонки шага
   var sheet = e.range.getSheet();
   var name = sheet.getName();
   if (SERVICE.indexOf(name) >= 0 || name.charAt(0) === '_') return;
@@ -34,7 +79,6 @@ function onEdit(e) {
   if (!cols.date || !cols.what) return;
 
   var watched = [cols.date, cols.what, cols.min, cols.stage].filter(function (c) { return c > 0; });
-  var c0 = e.range.getColumn(), c1 = e.range.getLastColumn();
   if (!watched.some(function (c) { return c0 <= c && c <= c1; })) return;
   var editedDate = c0 <= cols.date && cols.date <= c1;
 
@@ -48,11 +92,11 @@ function onEdit(e) {
   if (!touches.length) return;
 
   for (var r = Math.max(e.range.getRow(), HEADER_ROW + 1); r <= e.range.getLastRow(); r++) {
-    copyStep_(sheet, r, cols, touches, editedDate);
+    copyStep_(e.source, sheet, r, cols, touches, editedDate);
   }
 }
 
-function copyStep_(sheet, r, cols, touches, editedDate) {
+function copyStep_(book, sheet, r, cols, touches, editedDate) {
   var d = sheet.getRange(r, cols.date).getValue();
   if (!(d instanceof Date)) return;                       // нет даты — нечего копировать
   var what = String(sheet.getRange(r, cols.what).getValue() || '').trim();
@@ -83,8 +127,7 @@ function copyStep_(sheet, r, cols, touches, editedDate) {
   }
   var next = last + 1;
   if (next >= touches.length) {
-    SpreadsheetApp.getActive().toast('Все колонки касаний заняты — бот добавит новые в течение часа.',
-                                     'Касания', 8);
+    if (book) book.toast('Все колонки касаний заняты — бот добавит новые в течение часа.', 'Касания', 8);
     return;
   }
   write_(sheet, r, touches[next], d, fmt, min);
