@@ -15,7 +15,7 @@ from .config import Config, load_config
 from .network import (PartnerStats, compute_network, render_morning, render_weekly,
                       summary_rows)
 from .partners import Directory
-from .setup_sheet import (Sheet, ensure_structure, expand_history, refresh_stage_criteria,
+from .setup_sheet import (Sheet, ensure_structure, expand_history, fix_touch_columns, refresh_stage_criteria,
                           repair_month_block, rewrite_guide, upgrade_contact, write_summary)
 from .sheets import fetch_xlsx, google_session, parse_partners
 from .workbook import parse_partner_tabs
@@ -117,6 +117,7 @@ def sync(cfg: Config, net: Network, session=None) -> list[str]:
                 if (b.sheet_id, t.name) not in _CRITERIA_DONE:
                     try:
                         refresh_stage_criteria(sh, t)
+                        fix_touch_columns(sh, t, b.gids[t.name])
                         _CRITERIA_DONE.add((b.sheet_id, t.name))
                     except Exception:
                         log.exception("Не удалось обновить формулы факта на вкладке %s", t.name)

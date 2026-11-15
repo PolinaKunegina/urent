@@ -313,7 +313,7 @@ def expand_history(sh: Sheet, tab, gid: int, add: int = HISTORY_ADD) -> None:
     """Добавляет касания («Дата / Формат (этап) / Мин») после последнего; блок часов сдвигается вправо.
 
     Вставка идёт прямо перед разделителем, поэтому диапазоны формул факта расширяются сами."""
-    from .workbook import FIRST_ROW, HEADER_ROW, CLIENT_ROWS, COL_NEXT_DATE, touch_headers
+    from .workbook import HEADER_ROW, COL_NEXT_DATE, touch_headers
     last = tab.touch_cols[-1]
     triple = len(last) > 3 and last[3] is not None
     step = 3 if triple else 2
@@ -325,18 +325,10 @@ def expand_history(sh: Sheet, tab, gid: int, add: int = HISTORY_ADD) -> None:
                                            "startIndex": ins, "endIndex": ins + step * add},
                                  "inheritFromBefore": True}},
             _text_row(gid, HEADER_ROW - 1, ins, heads)]
-    for k in range(add):
-        c = ins + step * k
-        rng = {"sheetId": gid, "startRowIndex": FIRST_ROW - 1, "endRowIndex": HEADER_ROW + CLIENT_ROWS,
-               "startColumnIndex": c, "endColumnIndex": c + 1}
-        reqs.append({"repeatCell": {"range": rng, "cell": {"userEnteredFormat": {
-            "numberFormat": {"type": "DATE", "pattern": "dd.mm.yyyy"}}}, "fields": "userEnteredFormat.numberFormat"}})
-        reqs.append({"setDataValidation": {"range": rng, "rule": {"condition": {"type": "DATE_IS_VALID"},
-                                                                  "strict": True}}})
-        if triple:
-            mrng = dict(rng, startColumnIndex=c + 2, endColumnIndex=c + 3)
-            reqs.append({"setDataValidation": {"range": mrng, "rule": {"condition": {
-                "type": "NUMBER_GREATER_THAN_EQ", "values": [{"userEnteredValue": "0"}]}, "strict": True}}})
+    # новые колонки наследуют проверку соседней «Мин» — каждой колонке ставим свою заново
+    new_touch = [(last[0] + k + 1, ins + step * k, ins + step * k + 1, ins + step * k + 2 if triple else None)
+                 for k in range(add)]
+    reqs += touch_column_requests(gid, new_touch)
     if tab.plan_col is not None:   # ссылка «→ к моим часам» должна вести на новый адрес
         new_plan = tab.plan_col + step * add
         reqs.append(link_cell(gid, 0, COL_NEXT_DATE,
@@ -344,6 +336,51 @@ def expand_history(sh: Sheet, tab, gid: int, add: int = HISTORY_ADD) -> None:
                               size=12, bold=True))
     sh.batch(reqs)
     log.info("Вкладка «%s»: добавлено %d касаний", tab.name, add)
+
+
+def touch_column_requests(gid: int, touch_cols: list) -> list[dict]:
+    """Колонки истории: дата — календарь, «Формат (этап)» — свободный текст без проверки,
+    «Мин» — число. Так текст «вебинар, прогрев» никогда не упрётся в проверку «только число»."""
+    from .workbook import CLIENT_ROWS, FIRST_ROW, HEADER_ROW
+
+    def rng(c):
+        return {"sheetId": gid, "startRowIndex": FIRST_ROW - 1, "endRowIndex": HEADER_ROW + CLIENT_ROWS,
+                "startColumnIndex": c, "endColumnIndex": c + 1}
+
+    def width(c, px):
+        return {"updateDimensionProperties": {"range": {"sheetId": gid, "dimension": "COLUMNS",
+                                                        "startIndex": c, "endIndex": c + 1},
+                                              "properties": {"pixelSize": px}, "fields": "pixelSize"}}
+    reqs = []
+    for t in touch_cols:
+        d, f = t[1], t[2]
+        m = t[3] if len(t) > 3 else None
+        reqs += [
+            {"repeatCell": {"range": rng(d), "cell": {"userEnteredFormat": {
+                "numberFormat": {"type": "DATE", "pattern": "dd.mm.yyyy"}}}, "fields": "userEnteredFormat.numberFormat"}},
+            {"setDataValidation": {"range": rng(d), "rule": {"condition": {"type": "DATE_IS_VALID"},
+                                   "inputMessage": "Дата касания (календарь — двойной клик)", "strict": True}}},
+            width(d, 100),
+        ]
+        if f is not None:
+            reqs += [{"setDataValidation": {"range": rng(f)}},
+                     {"repeatCell": {"range": rng(f), "cell": {"userEnteredFormat": {
+                         "numberFormat": {"type": "TEXT"}}}, "fields": "userEnteredFormat.numberFormat"}},
+                     width(f, 150)]
+        if m is not None:
+            reqs += [{"setDataValidation": {"range": rng(m), "rule": {"condition": {
+                "type": "NUMBER_GREATER_THAN_EQ", "values": [{"userEnteredValue": "0"}]},
+                "inputMessage": "Минуты этого касания", "strict": True}}},
+                     {"repeatCell": {"range": rng(m), "cell": {"userEnteredFormat": {
+                         "numberFormat": {"type": "NUMBER", "pattern": "0"}}}, "fields": "userEnteredFormat.numberFormat"}},
+                     width(m, 50)]
+    return reqs
+
+
+def fix_touch_columns(sh: Sheet, tab, gid: int) -> None:
+    """Один раз на вкладку: проверки и формат колонок истории расставляются заново."""
+    if tab.touch_cols:
+        sh.batch(touch_column_requests(gid, tab.touch_cols))
 
 
 def _text_row(gid: int, row: int, col: int, texts: list) -> dict:

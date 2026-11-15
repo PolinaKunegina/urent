@@ -446,3 +446,25 @@ def test_stage_matched_by_word_and_old_formulas_rewritten():
     data = stage_criteria_updates(tab, [old, [1.5, "", "", 3, "", ""], new])
     assert [d["range"] for d in data] == [f"'Юля'!{c}5" for c in ("AE", "AF", "AG", "AH", "AI", "AJ")]
     assert [d["values"][0][0] for d in data] == new          # ручные цифры и новые формулы не трогаем
+
+
+def test_history_format_column_takes_text():
+    """Колонка «Формат (этап)» новых касаний не наследует проверку «только число» от «Мин»."""
+    from bot.setup_sheet import expand_history, touch_column_requests
+    from bot.workbook import PartnerTab, TOUCH_COLS
+
+    class FakeSheet:
+        def __init__(self):
+            self.reqs = []
+
+        def batch(self, reqs):
+            self.reqs += reqs
+    sh = FakeSheet()
+    expand_history(sh, PartnerTab(name="X", touch_cols=list(TOUCH_COLS), plan_col=26), 5, add=1)
+    dv = {r["setDataValidation"]["range"]["startColumnIndex"]: r["setDataValidation"].get("rule")
+          for r in sh.reqs if "setDataValidation" in r}
+    assert dv[25]["condition"]["type"] == "DATE_IS_VALID"         # дата 6-го касания
+    assert dv[26] is None                                          # формат — свободный текст
+    assert dv[27]["condition"]["type"] == "NUMBER_GREATER_THAN_EQ"  # минуты
+    reqs = touch_column_requests(5, [(6, 25, 26, 27)])
+    assert sum(1 for r in reqs if "setDataValidation" in r and "rule" not in r["setDataValidation"]) == 1
