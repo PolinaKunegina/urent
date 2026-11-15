@@ -96,3 +96,11 @@ pip install -r requirements.txt pytest
 pytest
 python -m bot.report --file выгрузка.xlsx --date 2026-11-10
 ```
+
+## Приватный репозиторий
+
+Сервер забирает обновления по своему ключу (deploy key), поэтому репозиторий можно сделать приватным,
+а обновления продолжат приходить сами. Ключ `deploy/update.sh` создаёт один раз; бот присылает его
+руководителю по команде `/deploykey`. Ключ добавляется в GitHub: репозиторий → Settings → Deploy keys →
+Add deploy key, без права записи. Когда `/deploykey` покажет зелёную галочку, репозиторий можно закрывать:
+Settings → Danger Zone → Change visibility → Make private.

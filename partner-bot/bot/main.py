@@ -290,6 +290,35 @@ async def cmd_myid(update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> None:
         f"username: @{update.effective_user.username or '—'}")
 
 
+async def cmd_deploykey(update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> None:
+    """Ключ сервера для приватного репозитория: его один раз добавляют в GitHub → Deploy keys."""
+    if not _is_manager(ctx, update):
+        return await _deny(update)
+    import os
+    data = os.path.dirname(os.path.abspath(_cfg(ctx).db_path))
+
+    def read(name):
+        try:
+            return open(os.path.join(data, name), encoding="utf-8").read().strip()
+        except OSError:
+            return ""
+    key, status = read("deploy_key.pub"), read("deploy_status")
+    if not key:
+        await update.effective_message.reply_text(
+            "Ключ сервера ещё не создан. Он появится в течение 5 минут после обновления — повторите /deploykey.")
+        return
+    how = status.split(" ")[0] if status else ""
+    state = {"ssh": "✅ Ключ уже работает: сервер забирает обновления по нему. Репозиторий можно делать приватным.",
+             "https": "⏳ Ключ пока не добавлен в GitHub, обновления идут по-старому (репозиторий публичный).",
+             "fail": "❌ Сервер сейчас не может забрать обновления: добавьте ключ в GitHub."}.get(how, "")
+    await update.effective_message.reply_text(
+        "Ключ сервера для GitHub. Добавить один раз:\n"
+        "1. GitHub → репозиторий urent → Settings → Deploy keys → Add deploy key.\n"
+        "2. Title: сервер бота. Key: всё, что ниже, целиком. Галочку «Allow write access» не ставить.\n"
+        "3. Add key. Через 5 минут проверьте /deploykey — должна быть зелёная галочка.\n\n"
+        f"{key}\n\n{state}" + (f"\nПоследняя проверка: {status.split(' ', 1)[1]}" if " " in status else ""))
+
+
 async def cmd_report(update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> None:
     if not _is_manager(ctx, update):
         return await _deny(update)
@@ -566,6 +595,7 @@ def main() -> None:
     app.add_handler(CommandHandler(["start", "help"], cmd_start))
     app.add_handler(CommandHandler(["guide", "template"], cmd_guide))
     app.add_handler(CommandHandler("myid", cmd_myid))
+    app.add_handler(CommandHandler("deploykey", cmd_deploykey))
     app.add_handler(CommandHandler("report", cmd_report))
     app.add_handler(CommandHandler("week", cmd_week))
     app.add_handler(CommandHandler("mine", cmd_mine))
