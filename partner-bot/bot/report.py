@@ -15,7 +15,8 @@ from .config import Config, load_config
 from .network import (PartnerStats, compute_network, render_morning, render_weekly,
                       summary_rows)
 from .partners import Directory
-from .setup_sheet import (Sheet, ensure_structure, expand_history, fix_touch_columns, refresh_stage_criteria,
+from .setup_sheet import (Sheet, ensure_structure, expand_history, fix_touch_columns, guide_is_current,
+                          refresh_stage_criteria,
                           repair_month_block, rewrite_guide, upgrade_contact, write_summary)
 from .sheets import fetch_xlsx, google_session, parse_partners
 from .workbook import parse_partner_tabs
@@ -87,6 +88,7 @@ def load_network(cfg: Config, today: date, session=None, local_xlsx: bytes | Non
 
 
 _CRITERIA_DONE: set[tuple[str, str]] = set()   # (таблица, вкладка) — формулы факта уже обновлены
+_GUIDE_CHECKED: set[str] = set()                # таблицы, где «Инструкцию» уже сверили с кодом
 
 
 def sync(cfg: Config, net: Network, session=None) -> list[str]:
@@ -123,8 +125,9 @@ def sync(cfg: Config, net: Network, session=None) -> list[str]:
                         log.exception("Не удалось обновить формулы факта на вкладке %s", t.name)
                 if t.history_full_soon():      # колонки касаний заканчиваются — добавляем новые
                     expand_history(sh, t, b.gids[t.name])
-            if upgraded:                          # инструкция — под новые колонки
-                rewrite_guide(sh, sandbox=b.sandbox)
+            if upgraded or (b.sheet_id not in _GUIDE_CHECKED and not guide_is_current(sh, b.sandbox)):
+                rewrite_guide(sh, sandbox=b.sandbox)   # инструкция — под новые колонки и новый текст
+            _GUIDE_CHECKED.add(b.sheet_id)
             if created:
                 log.info("Новые вкладки: %s", created)
             mine = [s for s in net.stats if s.sandbox == b.sandbox]

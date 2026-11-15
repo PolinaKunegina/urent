@@ -542,6 +542,15 @@ def add_month_block(sh: Sheet, tab, gid: int, today: date) -> None:
     sh.batch(reqs)
 
 
+def guide_is_current(sh: Sheet, sandbox: bool = False) -> bool:
+    """Текст «Инструкции» в таблице совпадает с текстом в коде."""
+    if GUIDE_TAB not in sh.tabs():
+        return False
+    have = [r[0] if r else "" for r in sh.get_values(f"'{GUIDE_TAB}'!A1:A{len(GUIDE) + 5}")]
+    want = [r[0] for r in guide_values(sandbox)]
+    return have[:len(want)] == want and not any(have[len(want):])
+
+
 def rewrite_guide(sh: Sheet, sandbox: bool = False) -> int:
     """Обновляет текст «Инструкции» на месте: лист не пересоздаётся, ссылки на него живы."""
     tabs = sh.tabs()
