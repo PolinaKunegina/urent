@@ -193,7 +193,7 @@ def parse_partner_tabs(xlsx: bytes, sandbox: bool = False) -> list[PartnerTab]:
     out = []
     try:
         for title in wb.sheetnames:
-            if title in SERVICE_TABS:
+            if title in SERVICE_TABS or title.startswith("_"):   # «_…» — архив и служебное, не партнёр
                 continue
             ws = wb[title]
             header_row = _is_partner_tab(ws)
