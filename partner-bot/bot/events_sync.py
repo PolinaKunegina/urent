@@ -252,7 +252,8 @@ def run(session, store, books, cfg_tz, today: date, tracker_id: str = "", sovetn
     if tracker_id:
         try:
             tracker = parse_tracker(read_tracker(session, tracker_id),
-                                    [p.name for b in books for p in b.directory.partners], today)
+                                    [n for b in books for p in b.directory.partners for n in (p.name, *p.aliases)],
+                                    today)
         except Exception as exc:
             warnings.append(f"Трекер комьюнити не прочитан ({exc.__class__.__name__}): дайте боту доступ «Читатель»")
     sovetnik = None

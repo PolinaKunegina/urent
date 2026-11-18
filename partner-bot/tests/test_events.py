@@ -161,3 +161,10 @@ def test_evening_lines_for_event_day():
     assert evening_lines(t, {e.key: e for e in EV}, date(2026, 11, 19)) == [
         "📍 Сегодня «Бизнес-встреча»: отметь галочкой «Был», кто пришёл — Котова Вера ✓, Орлов Пётр"]
     assert evening_lines(t, {e.key: e for e in EV}, TODAY) == []
+
+
+def test_tracker_skips_partner_written_by_alias():
+    rows = [["Дата"], ["12.11", "М", "Лина Герц (Алина Гайнаншина)", "", "", "", "", "", "", "офлайн"],
+            ["12.11", "М", "Руслан Татлыев", "", "", "", "", "", "", "офлайн"]]
+    tr = parse_tracker(rows, ["Гайнаншина Алина", "Алина Герц, Лина Герц"], TODAY)
+    assert tr.by_day[date(2026, 11, 12)] == [("Руслан Татлыев", "")]

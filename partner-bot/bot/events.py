@@ -453,8 +453,9 @@ def parse_tracker(values: list[list], partner_names: list[str], today: date) -> 
             day = day.replace(year=year - 1)
         base = re.sub(r"\s*\(.*\)\s*$", "", who)
         host = re.search(r"гост[ья]\s+([^)]+)", who, re.I)
-        if _key(base) in team and not host:
-            continue
+        inner = re.search(r"\(([^)]*)\)", who)
+        if not host and (_key(base) in team or (inner and _key(inner[1]) in team)):
+            continue          # партнёр или команда, в том числе «Лина Герц (Алина Гайнаншина)»
         tr.by_day.setdefault(day, []).append((base, host[1].strip() if host else ""))
     return tr
 
