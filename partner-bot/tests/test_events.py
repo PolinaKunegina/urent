@@ -168,3 +168,25 @@ def test_tracker_skips_partner_written_by_alias():
             ["12.11", "М", "Руслан Татлыев", "", "", "", "", "", "", "офлайн"]]
     tr = parse_tracker(rows, ["Гайнаншина Алина", "Алина Герц, Лина Герц"], TODAY)
     assert tr.by_day[date(2026, 11, 12)] == [("Руслан Татлыев", "")]
+
+
+def test_event_column_widths_survive_month_repair():
+    from bot.workbook import PartnerTab
+    t = PartnerTab(name="X", desc_col=9, plan_col=26, month_col=8, month_end=14)
+    reqs = event_cols_upgrade_requests(t, 7, TODAY, ";", [], None, None)
+    widths = {}
+    for r in reqs:
+        if "updateDimensionProperties" in r:
+            widths[r["updateDimensionProperties"]["range"]["startIndex"]] = r["updateDimensionProperties"]["properties"]["pixelSize"]
+    assert (widths[10], widths[11], widths[12]) == (190, 70, 95)
+
+
+def test_paid_before_event_not_counted_and_untracked_day_is_soft():
+    t = tab_with_events(clients=[{"name": "Коваленко Олеся", "event": K1, "came": True,
+                                  "status": "Купил маленький продукт (не оргвзнос)"}])
+    j = update_journal([], [("B", [t])], {e.key: e for e in EV}, TODAY)
+    summary, _ = build_report(j, [("B", [t])], EV, TODAY, Tracker(by_day={}), None)
+    s1 = next(s for s in summary if s[1] == "Бизнес-встреча")
+    assert s1[11] == 0 and s1[7] == "" and s1[13] == "в трекере нет записей за эту дату"
+    s2 = next(s for s in summary if s[1] == "Бизнес-завтрак")
+    assert s2[7] == "" and s2[13] == "✓"

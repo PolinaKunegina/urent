@@ -97,8 +97,10 @@ def event_cols_upgrade_requests(tab, gid: int, today: date, sep: str, protected:
         shifted = copy.copy(tab)
         if tab.month_col < at <= max(tab.month_end, tab.month_col + 1):
             shifted.month_end = tab.month_end + 3
-        reqs += month_repair_requests(shifted, gid, today, sep, protected, plan + len(PLAN_HEADERS))
+        reqs += [r for r in month_repair_requests(shifted, gid, today, sep, protected, plan + len(PLAN_HEADERS))
+                 if "updateDimensionProperties" not in r]      # ширину колонок мероприятий не трогаем
     reqs += partner_links(gid, plan, toc_gid, guide_gid)
+    reqs += [_width(gid, at, 190), _width(gid, at + 1, 70), _width(gid, at + 2, 95)]
     return reqs
 
 

@@ -212,11 +212,10 @@ def event_columns_requests(gid: int, at: int) -> list[dict]:
         reqs.append({"setDataValidation": {"range": _rng(gid, f0, last, c, c + 1),
                                            "rule": {"condition": {"type": "BOOLEAN"}}}})
         reqs.append({"repeatCell": {"range": _rng(gid, f0, last, c, c + 1), "cell": {"userEnteredFormat": {
-            "horizontalAlignment": "CENTER", "numberFormat": {"type": "TEXT"}}},
-            "fields": "userEnteredFormat.horizontalAlignment,userEnteredFormat.numberFormat"}})
+            "horizontalAlignment": "CENTER"}}, "fields": "userEnteredFormat.horizontalAlignment,userEnteredFormat.numberFormat"}})
     reqs += [_fill(gid, _rng(gid, HEADER_ROW - 1, HEADER_ROW, at, at + 3), GOOD, bold=True, wrap=True),
              _fill(gid, _rng(gid, f0, last, at, at + 3), YELLOW),
-             _width(gid, at, 190), _width(gid, at + 1, 55), _width(gid, at + 2, 85)]
+             _width(gid, at, 190), _width(gid, at + 1, 70), _width(gid, at + 2, 95)]
     return reqs
 
 
@@ -335,16 +334,19 @@ def build_report(journal: list[dict], books, events: list[Event], today: date,
         moved = [p for p in ps if _rank(p["status"]) is not None and p["r"].get("status_at_event") is not None
                  and _rank(p["r"]["status_at_event"]) is not None
                  and _rank(p["status"]) > _rank(p["r"]["status_at_event"])]
-        paid = [p for p in ps if PAID_RE.search(p["status"] or "")]
+        paid = [p for p in ps if PAID_RE.search(p["status"] or "")          # оплатили после мероприятия
+                and not PAID_RE.search(p["r"].get("status_at_event") or "")]
         on_tabs = sum(1 for p in ps if p["r"].get("_on_tab", True))
-        tr = None
-        if tracker is not None and ev:
-            tr = len(tracker.by_day.get(ev.day, []))
+        tr = None                 # пусто: мероприятие впереди или трекер этот день не вёл
+        if tracker is not None and ev and ev.day <= today and ev.day in tracker.by_day:
+            tr = len(tracker.by_day[ev.day])
         checks = []
         if on_tabs != len(ps):
             checks.append(f"⚠ на вкладках {on_tabs}, в журнале {len(ps)}")
-        if tr is not None and ev and ev.day <= today and tr != len(came):
+        if tr is not None and tr != len(came):
             checks.append(f"⚠ пришло по галочкам {len(came)}, по трекеру {tr}")
+        elif tracker is not None and ev and ev.day <= today and tr is None and ps:
+            checks.append("в трекере нет записей за эту дату")
         if not ev:
             checks.append("⚠ мероприятия нет в справочнике")
         by_partner = {}
