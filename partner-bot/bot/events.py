@@ -357,7 +357,7 @@ def build_report(journal: list[dict], books, events: list[Event], today: date,
         plan = ev.plan if ev and ev.plan is not None else ""
         pct = f"{round(100 * len(came) / plan)}%" if plan and ev.day <= today else ""
         summary.append([
-            ev.day.isoformat() if ev else "", ev.title if ev else k, ev.kind if ev else "", ev.fmt if ev else "",
+            f"{ev.day:%d.%m.%Y}" if ev else "", ev.title if ev else k, ev.kind if ev else "", ev.fmt if ev else "",
             plan, len(ps), len(came), "" if tr is None else tr, len(reg), len(came) - len(reg),
             len(moved), len(paid), pct, "; ".join(checks) or "✓",
             ", ".join(f"{w} {a[0]}/{a[1]}" for w, a in sorted(by_partner.items(), key=lambda x: -x[1][0])),
@@ -367,7 +367,7 @@ def build_report(journal: list[dict], books, events: list[Event], today: date,
     for p in sorted(people, key=lambda p: ((p["ev"].day if p["ev"] else date.min), p["who"], p["r"]["client"]),
                     reverse=True):
         r = p["r"]
-        rows.append([p["ev"].day.isoformat() if p["ev"] else "", p["ev"].title if p["ev"] else r["event"],
+        rows.append([f"{p['ev'].day:%d.%m.%Y}" if p["ev"] else "", p["ev"].title if p["ev"] else r["event"],
                      r["client"], r.get("contact") or "", p["who"], p["stage"], p["status"],
                      "✓" if r.get("attended") else "", "✓" if r.get("registered") else "", p["outcome"],
                      r.get("status_at_event") or "", p["check"]])
