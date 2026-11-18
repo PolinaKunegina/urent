@@ -474,6 +474,78 @@ async def cmd_pause(update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> None:
         f"⏸ Рассылки на паузе {when}: ни сводок, ни напоминаний. Включить — /resume")
 
 
+def _events_on(ctx) -> bool:
+    return (_store(ctx).get_setting("events") or "off") == "on"
+
+
+def _drive_id_from(text: str) -> str:
+    """ID таблицы (…/d/ID) или папки (…/folders/ID) из ссылки."""
+    m = re.search(r"/(?:d|folders)/([A-Za-z0-9_-]{20,})", text or "") or re.search(r"([A-Za-z0-9_-]{25,})", text or "")
+    return m.group(1) if m else ""
+
+
+async def cmd_events(update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> None:
+    """/events on|off — мероприятия: справочник, колонки на вкладках, лист «События»."""
+    if not _is_manager(ctx, update):
+        return await _deny(update)
+    arg = (ctx.args[0] if ctx.args else "").lower()
+    store = _store(ctx)
+    if arg in {"on", "off"}:
+        store.set_setting("events", arg)
+    on = _events_on(ctx)
+    tr, sv = store.get_setting("tracker_sheet"), store.get_setting("sovetnik_folder")
+    await update.effective_message.reply_text(
+        ("✅ Мероприятия включены: в течение 5 минут появятся справочник «Мероприятия», колонки "
+         "«Мероприятие / Был / В Советнике» у партнёров и лист «События»." if on else
+         "⏸ Мероприятия выключены. Включить: /events on") +
+        f"\nТрекер комьюнити: {'подключён' if tr else 'нет — /settracker ссылка'}"
+        f"\nПапка выгрузок Советника: {'подключена' if sv else 'нет — /setsovetnik ссылка на папку'}")
+
+
+async def cmd_settracker(update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> None:
+    if not _is_manager(ctx, update):
+        return await _deny(update)
+    sid = _drive_id_from(" ".join(ctx.args or []))
+    if not sid:
+        await update.effective_message.reply_text("Так: /settracker ссылка на «Трекер комьюнити»")
+        return
+    _store(ctx).set_setting("tracker_sheet", sid)
+    await update.effective_message.reply_text(
+        "✅ Трекер подключён. Дайте боту доступ «Читатель» к этой таблице: "
+        "partners-pulse-bot@partners-pulse.iam.gserviceaccount.com")
+
+
+async def cmd_setsovetnik(update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> None:
+    if not _is_manager(ctx, update):
+        return await _deny(update)
+    fid = _drive_id_from(" ".join(ctx.args or []))
+    if not fid:
+        await update.effective_message.reply_text("Так: /setsovetnik ссылка на папку с выгрузками Советника")
+        return
+    _store(ctx).set_setting("sovetnik_folder", fid)
+    await update.effective_message.reply_text(
+        "✅ Папка подключена. Дайте боту доступ «Читатель» к папке: "
+        "partners-pulse-bot@partners-pulse.iam.gserviceaccount.com — бот берёт самый свежий файл.")
+
+
+async def job_events(ctx: ContextTypes.DEFAULT_TYPE) -> None:
+    """Каждые 5 минут, если включено: мероприятия и лист «События»."""
+    if not _events_on(ctx):
+        return
+    from .events_sync import run
+    from .sheets import google_session
+    cfg, store = _cfg(ctx), _store(ctx)
+    net = await _network(ctx)
+    try:
+        session = google_session(cfg.service_account_file)
+        for w in await asyncio.to_thread(run, session, store, net.books, cfg.tz, net.today,
+                                         store.get_setting("tracker_sheet") or "",
+                                         store.get_setting("sovetnik_folder") or ""):
+            log.warning(w)
+    except Exception:
+        log.exception("Мероприятия: не удалось обновить")
+
+
 async def cmd_resume(update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> None:
     if not _is_manager(ctx, update):
         return await _deny(update)
@@ -569,15 +641,30 @@ async def job_evening(ctx: ContextTypes.DEFAULT_TYPE) -> None:
         except Exception:
             log.exception("Не удалось отправить напоминание в чат")
     directory = net.directory
+    lines_by_tab = {}
+    if _events_on(ctx):          # день мероприятия: отметить, кто пришёл
+        from .events import evening_lines, parse_event_rows
+        from .setup_sheet import Sheet
+        from .sheets import google_session
+        try:
+            main_book = next(b for b in net.books if not b.sandbox)
+            rows = Sheet(google_session(_cfg(ctx).service_account_file), main_book.sheet_id).get_values(
+                "'Мероприятия'!A5:F500")
+            evs = {e.key: e for e in parse_event_rows(rows)}
+            lines_by_tab = {t.name: evening_lines(t, evs, net.today) for b in net.books for t in b.tabs}
+        except Exception:
+            log.exception("Мероприятия: не удалось собрать вечерние строки")
     for s in net.stats:
-        if not needs_evening_ping(s):
+        extra = lines_by_tab.get(s.name) or []
+        if not needs_evening_ping(s) and not extra:
             continue
         p = next((x for x in directory.partners if x.name == s.name), None)
         found = store.user_by_username(p.username) if p and p.username else None
         if not found or not found[1]:
             continue  # партнёр не нажал Start — написать первым бот не может
         try:
-            await _send(ctx, found[0], render_partner_status(s, net.today, net.tab_url(s.name)))
+            await _send(ctx, found[0], "\n".join([render_partner_status(s, net.today, net.tab_url(s.name)),
+                                                  *extra]))
         except Exception:
             log.exception("Не удалось написать партнёру %s", s.name)
 
@@ -631,6 +718,9 @@ def main() -> None:
     app.add_handler(CommandHandler("status", cmd_status))
     app.add_handler(CommandHandler("pause", cmd_pause))
     app.add_handler(CommandHandler("resume", cmd_resume))
+    app.add_handler(CommandHandler("events", cmd_events))
+    app.add_handler(CommandHandler("settracker", cmd_settracker))
+    app.add_handler(CommandHandler("setsovetnik", cmd_setsovetnik))
     app.add_handler(CommandHandler("join", cmd_join))
     app.add_handler(CommandHandler("addpartner", cmd_addpartner))
     app.add_handler(CommandHandler("access", cmd_access))
@@ -646,6 +736,7 @@ def main() -> None:
         jq.run_daily(job_evening, time=cfg.reminder_time.replace(tzinfo=cfg.tz), name="evening")
     jq.run_repeating(job_sync, interval=3600, first=30, name="sync")
     jq.run_repeating(job_results, interval=300, first=60, name="results")
+    jq.run_repeating(job_events, interval=300, first=120, name="events")
 
     log.info("Бот запущен: сводка в %s, напоминание в %s, руководители %s",
              cfg.report_time, cfg.reminder_time, cfg.managers)

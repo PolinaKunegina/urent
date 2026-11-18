@@ -19,7 +19,9 @@
  *  • поправили «что», минуты или этап у того же шага → обновляется та же тройка;
  *  • поменяли дату, а прошлый шаг ещё не наступил (перенос встречи) → правится последняя тройка;
  *  • поменяли дату, а прошлый шаг уже прошёл (касание состоялось) → добавляется новая тройка;
- *  • тройки закончились → бот добавит новые колонки в течение часа.
+ *  • тройки закончились → бот добавит новые колонки в течение часа;
+ *  • сменили «Мероприятие» у клиента → галочка «Был» снимается (она про прошлое мероприятие,
+ *    бот уже сохранил её в журнале), «В Советнике» остаётся.
  */
 var SHEETS = [
   '1Qmor5QB9QTwQMBAfGUMexlTpHysdOzwReeOlYN5-uSA',   // основная таблица сети
@@ -63,7 +65,7 @@ function status() {
 function onStepEdit(e) {
   if (!e || !e.range) return;
   var c0 = e.range.getColumn(), c1 = e.range.getLastColumn();
-  if (c1 < 3 || c0 > 12 || e.range.getLastRow() <= HEADER_ROW) return;   // быстрый выход: не колонки шага
+  if (c1 < 3 || c0 > 16 || e.range.getLastRow() <= HEADER_ROW) return;   // быстрый выход: не колонки шага
   var sheet = e.range.getSheet();
   var name = sheet.getName();
   if (SERVICE.indexOf(name) >= 0 || name.charAt(0) === '_') return;
@@ -76,6 +78,11 @@ function onStepEdit(e) {
     min: headers.indexOf('время, мин') + 1,
     stage: headers.indexOf('этап') + 1
   };
+  var cEvent = headers.indexOf('мероприятие') + 1, cCame = headers.indexOf('был') + 1;
+  if (cEvent && cCame && c0 <= cEvent && cEvent <= c1 && !(c0 <= cCame && cCame <= c1)) {
+    var r0 = Math.max(e.range.getRow(), HEADER_ROW + 1), n = e.range.getLastRow() - r0 + 1;
+    if (n > 0) sheet.getRange(r0, cCame, n, 1).setValue(false);      // новое мероприятие — «Был» заново
+  }
   if (!cols.date || !cols.what) return;
 
   var watched = [cols.date, cols.what, cols.min, cols.stage].filter(function (c) { return c > 0; });

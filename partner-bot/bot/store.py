@@ -20,6 +20,13 @@ CREATE TABLE IF NOT EXISTS results (       -- засчитанные резул�
 CREATE TABLE IF NOT EXISTS goals_archive ( -- цели и результаты прошлых месяцев
     book TEXT, tab TEXT, month TEXT, cat TEXT, goal REAL, result REAL
 );
+CREATE TABLE IF NOT EXISTS invitations (    -- журнал приглашений на мероприятия
+    book TEXT, tab TEXT, client TEXT, event TEXT,
+    contact TEXT DEFAULT '', attended INTEGER DEFAULT 0, registered INTEGER DEFAULT 0,
+    status_at_event TEXT,           -- статус клиента в день мероприятия (для «дошёл дальше»)
+    first_seen TEXT, current INTEGER DEFAULT 1,
+    PRIMARY KEY (book, tab, client, event)
+);
 CREATE TABLE IF NOT EXISTS settings (
     key TEXT PRIMARY KEY,
     value TEXT
@@ -86,3 +93,20 @@ class Store:
     def has_result(self, book: str, tab: str, client: str, cat: str, month: str) -> bool:
         return self.db.execute("SELECT 1 FROM results WHERE book=? AND tab=? AND client=? AND cat=? "
                                "AND day LIKE ? LIMIT 1", (book, tab, client, cat, f"{month}%")).fetchone() is not None
+
+    # ---------- журнал приглашений на мероприятия ----------
+
+    def invitations(self) -> list[dict]:
+        cols = ["book", "tab", "client", "event", "contact", "attended", "registered",
+                "status_at_event", "first_seen", "current"]
+        rows = self.db.execute(f"SELECT {', '.join(cols)} FROM invitations").fetchall()
+        return [dict(zip(cols, r)) for r in rows]
+
+    def save_invitations(self, rows: list[dict]) -> None:
+        with self.db:
+            self.db.execute("DELETE FROM invitations")
+            self.db.executemany(
+                "INSERT INTO invitations VALUES (?,?,?,?,?,?,?,?,?,?)",
+                [(r["book"], r["tab"], r["client"], r["event"], r.get("contact", ""), int(bool(r.get("attended"))),
+                  int(bool(r.get("registered"))), r.get("status_at_event"), r.get("first_seen"),
+                  int(bool(r.get("current")))) for r in rows])

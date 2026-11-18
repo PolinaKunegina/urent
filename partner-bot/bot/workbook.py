@@ -159,6 +159,8 @@ class PartnerTab:
     month_ok: bool = True                            # подписи стоят подряд, как задумано
     month_end: int = 0                               # колонка за последней ячейкой блока
     next_what_col: int | None = None
+    desc_col: int | None = None                      # «Что происходит»
+    event_col: int | None = None                     # «Мероприятие» (нет — колонок мероприятий ещё нет)
 
     def history_full_soon(self) -> bool:
         """У кого-то из клиентов осталось меньше двух свободных пар касаний."""
@@ -177,6 +179,11 @@ def _num(v) -> float | None:
         return float(str(v).replace(",", "."))
     except ValueError:
         return None
+
+
+def _flag(v) -> bool:
+    """Галочка: True из выгрузки или «TRUE»/«ИСТИНА» текстом."""
+    return v is True or str(v).strip().lower() in {"true", "истина", "1", "да", "✓", "✅"}
 
 
 def _is_partner_tab(ws) -> int | None:
@@ -244,6 +251,8 @@ def _parse_rows(title: str, rows: list[tuple], sandbox: bool) -> PartnerTab:
 
     c_name, c_src = idx.get("имя клиента"), find("откуда")
     c_status, c_desc = find("текущий статус"), find("что происходит")
+    c_contact, c_stage = find("контакт"), idx.get("этап")
+    c_event, c_att, c_reg = find("мероприятие"), idx.get("был"), find("в советнике")
     c_next_date, c_next_what = find("следующий шаг: дата"), find("следующий шаг: что")
     touch_cols = []
     for i, h in enumerate(head):
@@ -263,7 +272,8 @@ def _parse_rows(title: str, rows: list[tuple], sandbox: bool) -> PartnerTab:
         return row[i] if i is not None and i < len(row) else None
 
     tab = PartnerTab(name=title, sandbox=sandbox, touch_cols=touch_cols, plan_col=c_date,
-                     time_col=find("время"), next_what_col=c_next_what, contact_col=find("контакт"))
+                     time_col=find("время"), next_what_col=c_next_what, contact_col=c_contact,
+                     desc_col=c_desc, event_col=c_event)
     for offset, row in enumerate(rows[1:], 1):
         r_num = HEADER_ROW + offset
         name = _clean(cell(row, c_name))
@@ -279,6 +289,9 @@ def _parse_rows(title: str, rows: list[tuple], sandbox: bool) -> PartnerTab:
                                     source=_clean(cell(row, c_src)),
                                     status=_clean(cell(row, c_status)),
                                     description=_clean(cell(row, c_desc)), touches=touches,
+                                    contact=_clean(cell(row, c_contact)), stage=_clean(cell(row, c_stage)),
+                                    event=_clean(cell(row, c_event)), attended=_flag(cell(row, c_att)),
+                                    registered=_flag(cell(row, c_reg)),
                                     next_date=to_date(cell(row, c_next_date)),
                                     next_what=_clean(cell(row, c_next_what))))
         d = to_date(cell(row, c_date))

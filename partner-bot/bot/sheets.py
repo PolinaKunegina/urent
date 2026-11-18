@@ -40,6 +40,11 @@ class Lead:
     touches: list[Touch] = field(default_factory=list)
     next_date: date | None = None   # «Следующий шаг: дата» (новая вкладка партнёра)
     next_what: str = ""
+    contact: str = ""               # «Контакт (по желанию)»
+    stage: str = ""                 # «Этап» следующего шага
+    event: str = ""                 # «Мероприятие»: «дд.мм · Название» из справочника
+    attended: bool = False          # «Был» на этом мероприятии
+    registered: bool = False        # «В Советнике»
 
     def dates(self) -> list[date]:
         return [t.when for t in self.touches if t.when]
