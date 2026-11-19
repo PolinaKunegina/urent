@@ -190,3 +190,17 @@ def test_paid_before_event_not_counted_and_untracked_day_is_soft():
     assert s1[11] == 0 and s1[7] == "" and s1[13] == "в трекере нет записей за эту дату"
     s2 = next(s for s in summary if s[1] == "Бизнес-завтрак")
     assert s2[7] == "" and s2[13] == "✓"
+
+
+def test_event_row_status_not_red_and_not_a_client():
+    from bot.network import compute_partner
+    from bot.setup_sheet import event_status_requests
+    from bot.workbook import new_leads_in_month
+    t = tab_with_events(clients=[{"name": "Нетворкинг 18.11", "status": "Событие (не клиент)"},
+                                 {"name": "Котова Вера", "status": "Новый контакт"}])
+    ps = compute_partner(t, TODAY)
+    assert [l.name for l in ps.active] == ["Котова Вера"] and not ps.closed
+    assert new_leads_in_month(t, TODAY) == 0
+    reqs = json.dumps(event_status_requests(t, 9, ";"), ensure_ascii=False)
+    assert '"Событие (не клиент)"' in reqs and 'REGEXMATCH(LOWER($I5);\\"событие\\")' in reqs
+    assert '"index": 0' in reqs

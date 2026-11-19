@@ -377,6 +377,46 @@ def touch_column_requests(gid: int, touch_cols: list) -> list[dict]:
     return reqs
 
 
+def event_status_requests(tab, gid: int, sep: str) -> list[dict]:
+    """Статус «Событие (не клиент)» на существующей вкладке: новый список статусов и правило
+    подсветки поверх красного — строка-событие не краснеет (первое правило важнее)."""
+    from .workbook import CLIENT_ROWS, FIRST_ROW, HEADER_ROW, STATUSES, fx
+    if tab.status_col is None or tab.next_date_col is None:
+        return []
+    st = col_letter(tab.status_col)
+
+    def rng(c):
+        return {"sheetId": gid, "startRowIndex": FIRST_ROW - 1, "endRowIndex": HEADER_ROW + CLIENT_ROWS,
+                "startColumnIndex": c, "endColumnIndex": c + 1}
+    return [
+        {"setDataValidation": {"range": rng(tab.status_col), "rule": {
+            "condition": {"type": "ONE_OF_LIST", "values": [{"userEnteredValue": s} for s in STATUSES]},
+            "showCustomUi": True, "strict": False}}},
+        {"addConditionalFormatRule": {"index": 0, "rule": {
+            "ranges": [rng(1), rng(tab.next_date_col)],
+            "booleanRule": {"condition": {"type": "CUSTOM_FORMULA", "values": [
+                {"userEnteredValue": fx(f'=REGEXMATCH(LOWER(${st}{FIRST_ROW}),"событие")', sep)}]},
+                "format": {"backgroundColor": {"red": 0.93, "green": 0.95, "blue": 1.0},
+                           "textFormat": {"bold": False, "foregroundColor": {"red": 0.2, "green": 0.2, "blue": 0.2}}}}}}},
+    ]
+
+
+def ensure_event_status(sh: Sheet, tabs: list, gids: dict) -> int:
+    """Один раз на вкладку: добавляет статус «Событие (не клиент)», если его правила ещё нет."""
+    r = sh.s.get(f"{API}/{sh.id}", params={"fields": "sheets(properties.sheetId,conditionalFormats.booleanRule.condition)"},
+                 timeout=30)
+    r.raise_for_status()
+    has = {x["properties"]["sheetId"] for x in r.json().get("sheets", [])
+           if "событие" in str(x.get("conditionalFormats", "")).lower()}
+    reqs = []
+    for t in tabs:
+        gid = gids.get(t.name)
+        if gid is not None and gid not in has:
+            reqs += event_status_requests(t, gid, sh.sep())
+    sh.batch(reqs)
+    return len(reqs) // 2
+
+
 def fix_touch_columns(sh: Sheet, tab, gid: int) -> None:
     """Один раз на вкладку: проверки и формат колонок истории расставляются заново."""
     if tab.touch_cols:

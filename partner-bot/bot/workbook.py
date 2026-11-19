@@ -76,8 +76,9 @@ STATUSES = [
     "Новый контакт", "Был на встрече", "Приглашён на следующую встречу",
     "Назначена диагностика", "Прошёл диагностику",
     "Купил маленький продукт (не оргвзнос)", "Оплатил 95", "Оплатил 240",
-    "Коллаборация / эксперт", "Отказ",
+    "Коллаборация / эксперт", "Событие (не клиент)", "Отказ",
 ]
+EVENT_STATUS = "Событие (не клиент)"   # строка-событие: нетворкинг, своё мероприятие — время есть, клиента нет
 # старые статусы → новые (для перевода уже заполненных строк)
 STATUS_MIGRATION = {
     "назначено касание": "Приглашён на следующую встречу",
@@ -85,7 +86,7 @@ STATUS_MIGRATION = {
     "диагностика": "Назначена диагностика",
     "стал партнёром": "Оплатил 240",
 }
-EXCLUDED_RE = r"отказ"                                                  # не в работе
+EXCLUDED_RE = r"отказ|событие"                                         # не в работе и не клиент
 CLOSED_RE = r"оплатил 240|стал партн|стал ментор|коллаборац|оплатил пакет"  # шаг не нужен, не красный
 
 # Блок «Мой месяц» (строки 1–3): цели вписывает партнёр, результаты считает бот по смене статусов
@@ -109,6 +110,8 @@ def new_leads_in_month(tab, today: date) -> int:
     """Клиенты, чьё самое раннее касание пришлось на текущий месяц (не позже сегодня)."""
     n = 0
     for c in tab.clients:
+        if re.search(EXCLUDED_RE, c.status or "", re.I):
+            continue
         dates = [x.when for x in c.touches if x.when]
         if dates and min(dates).year == today.year and min(dates).month == today.month and min(dates) <= today:
             n += 1
@@ -160,6 +163,8 @@ class PartnerTab:
     month_end: int = 0                               # колонка за последней ячейкой блока
     next_what_col: int | None = None
     desc_col: int | None = None                      # «Что происходит»
+    status_col: int | None = None                    # «Текущий статус»
+    next_date_col: int | None = None                 # «Следующий шаг: дата»
     event_col: int | None = None                     # «Мероприятие» (нет — колонок мероприятий ещё нет)
 
     def history_full_soon(self) -> bool:
@@ -273,7 +278,7 @@ def _parse_rows(title: str, rows: list[tuple], sandbox: bool) -> PartnerTab:
 
     tab = PartnerTab(name=title, sandbox=sandbox, touch_cols=touch_cols, plan_col=c_date,
                      time_col=find("время"), next_what_col=c_next_what, contact_col=c_contact,
-                     desc_col=c_desc, event_col=c_event)
+                     desc_col=c_desc, event_col=c_event, status_col=c_status, next_date_col=c_next_date)
     for offset, row in enumerate(rows[1:], 1):
         r_num = HEADER_ROW + offset
         name = _clean(cell(row, c_name))
